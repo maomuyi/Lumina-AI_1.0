@@ -199,7 +199,7 @@ export default function HomePage() {
       />
 
       {/* Three-column layout */}
-      <div className="flex flex-1 overflow-hidden">
+      <div className="flex flex-1 overflow-hidden gap-px bg-border">
         {/* Left sidebar */}
         <LeftSidebar
           onFileUpload={handleFileUpload}

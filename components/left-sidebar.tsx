@@ -54,7 +54,7 @@ export function LeftSidebar({
   )
 
   return (
-    <aside className="flex w-[260px] shrink-0 flex-col border-r border-border bg-card">
+    <aside className="flex w-[260px] shrink-0 flex-col bg-card">
       <ScrollArea className="flex-1">
         <div className="flex flex-col gap-0 p-0">
           {/* Upload Section */}

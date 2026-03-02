@@ -58,7 +58,7 @@ export function CenterCanvas({
   }, [])
 
   return (
-    <div className="flex flex-1 flex-col overflow-hidden bg-canvas-bg">
+    <div className="flex min-w-0 flex-1 flex-col overflow-hidden bg-canvas-bg">
       {/* Image preview area */}
       <div className="relative flex flex-1 items-center justify-center overflow-auto p-6">
         {imageUrl ? (
@@ -137,7 +137,7 @@ export function CenterCanvas({
 
       {/* Diagnostics panel (collapsible) */}
       {(diagnostics || isAnalyzing) && (
-        <div className="shrink-0 border-t border-border bg-card">
+        <div className="mx-4 mb-4 shrink-0 overflow-hidden rounded-lg border border-border bg-card shadow-sm">
           <button
             onClick={() => setDiagOpen(!diagOpen)}
             className="flex w-full items-center gap-2 px-4 py-2.5 text-[13px] font-medium text-foreground hover:bg-secondary/50"
