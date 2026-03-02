@@ -47,7 +47,7 @@ export function RightPanel({
   const defaultOpenGroups = ["basic", "presence", "tone_curve"]
 
   return (
-    <aside className="flex w-[340px] shrink-0 flex-col border-l border-border bg-sidebar">
+    <aside className="flex w-[340px] shrink-0 flex-col border-l border-border/80 bg-sidebar">
       <ScrollArea className="flex-1">
         <div className="flex flex-col">
           {/* AI Strategy Section */}

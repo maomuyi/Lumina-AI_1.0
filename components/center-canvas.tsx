@@ -60,16 +60,16 @@ export function CenterCanvas({
   return (
     <div className="flex min-w-0 flex-1 flex-col overflow-hidden bg-canvas-bg">
       {/* Image preview area */}
-      <div className="relative flex flex-1 items-center justify-center overflow-auto p-8">
+      <div className="relative flex flex-1 items-center justify-center overflow-auto px-10 py-8">
         {imageUrl ? (
           <div className="relative">
             {/* Image with subtle shadow */}
             <img
               src={imageUrl}
               alt="上传的照片"
-              className={`rounded-md shadow-[0_4px_24px_rgba(0,0,0,0.4)] ${
+              className={`rounded-lg shadow-[0_8px_32px_rgba(0,0,0,0.5)] ring-1 ring-white/5 ${
                 zoom === "fit"
-                  ? "max-h-[calc(100vh-260px)] max-w-full object-contain"
+                  ? "max-h-[calc(100vh-300px)] max-w-[calc(100%-2rem)] object-contain"
                   : "max-w-none"
               }`}
             />
@@ -124,10 +124,10 @@ export function CenterCanvas({
 
       {/* Diagnostics panel (collapsible) */}
       {(diagnostics || isAnalyzing) && (
-        <div className="mx-4 mb-4 shrink-0 overflow-hidden rounded-xl bg-card ring-1 ring-border">
+        <div className="mx-6 mb-5 shrink-0 overflow-hidden rounded-xl border border-border/60 bg-card/80 shadow-[0_4px_20px_rgba(0,0,0,0.25)] backdrop-blur-sm">
           <button
             onClick={() => setDiagOpen(!diagOpen)}
-            className="flex w-full items-center gap-2 px-4 py-2.5 text-[12px] font-semibold text-foreground transition-colors hover:bg-secondary/50"
+            className="flex w-full items-center gap-2 border-b border-border/40 px-4 py-3 text-[12px] font-semibold text-foreground transition-colors hover:bg-secondary/30"
           >
             {diagOpen ? (
               <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
@@ -136,19 +136,19 @@ export function CenterCanvas({
             )}
             <span>图像诊断</span>
             {diagnostics && (
-              <span className="ml-auto text-[10px] font-normal text-muted-foreground/50">
+              <span className="ml-auto rounded-md bg-secondary px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
                 {fileType === "nef" ? "RAW" : "JPEG"} / {diagnostics.colorSpace}
               </span>
             )}
           </button>
 
           {diagOpen && (
-            <ScrollArea className="max-h-[280px]">
-              <div className="px-4 pb-4">
+            <ScrollArea className="max-h-[260px]">
+              <div className="px-5 pb-5 pt-4">
                 {isAnalyzing && !diagnostics ? (
                   <DiagnosticsSkeleton />
                 ) : diagnostics ? (
-                  <div className="grid grid-cols-2 gap-5">
+                  <div className="grid grid-cols-3 gap-6">
                     {/* Basic Info */}
                     <div className="space-y-2.5">
                       <h4 className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/60">
@@ -220,35 +220,38 @@ export function CenterCanvas({
                       </div>
                     </div>
 
-                    {/* RAW Headroom */}
-                    {fileType === "nef" && (
+                    {/* Third column: Scene + Headroom */}
+                    <div className="space-y-4">
+                      {/* AI Scene Recognition */}
                       <div className="space-y-2.5">
                         <h4 className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/60">
-                          RAW 宽容度
+                          AI 场景识别
                         </h4>
-                        <div className="space-y-2.5">
-                          <HeadroomBar
-                            label="高光余量"
-                            value={diagnostics.highlightHeadroom}
-                          />
-                          <HeadroomBar
-                            label="阴影余量"
-                            value={diagnostics.shadowHeadroom}
-                          />
+                        <div className="flex flex-wrap gap-1.5">
+                          <SceneTag label={diagnostics.sceneType} />
+                          <SceneTag label={diagnostics.lightCondition} />
+                          <SceneTag label={diagnostics.mainTone} />
                         </div>
                       </div>
-                    )}
 
-                    {/* AI Scene Recognition */}
-                    <div className="space-y-2.5">
-                      <h4 className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/60">
-                        AI 场景识别
-                      </h4>
-                      <div className="flex flex-wrap gap-1.5">
-                        <SceneTag label={diagnostics.sceneType} />
-                        <SceneTag label={diagnostics.lightCondition} />
-                        <SceneTag label={diagnostics.mainTone} />
-                      </div>
+                      {/* RAW Headroom */}
+                      {fileType === "nef" && (
+                        <div className="space-y-2.5">
+                          <h4 className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/60">
+                            RAW 宽容度
+                          </h4>
+                          <div className="space-y-2.5">
+                            <HeadroomBar
+                              label="高光余量"
+                              value={diagnostics.highlightHeadroom}
+                            />
+                            <HeadroomBar
+                              label="阴影余量"
+                              value={diagnostics.shadowHeadroom}
+                            />
+                          </div>
+                        </div>
+                      )}
                     </div>
                   </div>
                 ) : null}
@@ -317,7 +320,7 @@ function SceneTag({ label }: { label: string }) {
 
 function DiagnosticsSkeleton() {
   return (
-    <div className="grid grid-cols-2 gap-4">
+    <div className="grid grid-cols-3 gap-6">
       <div className="space-y-2">
         <Skeleton className="h-3 w-16 bg-secondary" />
         <Skeleton className="h-4 w-full bg-secondary" />
@@ -328,6 +331,11 @@ function DiagnosticsSkeleton() {
       <div className="space-y-2">
         <Skeleton className="h-3 w-16 bg-secondary" />
         <Skeleton className="h-20 w-full bg-secondary" />
+      </div>
+      <div className="space-y-2">
+        <Skeleton className="h-3 w-16 bg-secondary" />
+        <Skeleton className="h-5 w-16 rounded-md bg-secondary" />
+        <Skeleton className="h-5 w-20 rounded-md bg-secondary" />
       </div>
     </div>
   )
