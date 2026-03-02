@@ -29,7 +29,7 @@ export function ParamSlider({
   useEffect(() => {
     if (isAiModified) {
       setFlashActive(true)
-      const timer = setTimeout(() => setFlashActive(false), 800)
+      const timer = setTimeout(() => setFlashActive(false), 1000)
       return () => clearTimeout(timer)
     }
   }, [isAiModified, value])
@@ -77,11 +77,17 @@ export function ParamSlider({
   const isModified = value !== param.defaultValue
 
   return (
-    <div className="group flex items-center gap-2 px-0 py-[3px]">
+    <div
+      className={`group flex items-center gap-2 rounded-md px-1 py-[4px] transition-colors duration-500 ${
+        flashActive ? "bg-glow-primary" : "hover:bg-secondary/30"
+      }`}
+    >
       {/* Label */}
       <span
-        className={`w-[72px] shrink-0 text-[11px] leading-none ${
-          isModified ? "font-medium text-foreground" : "text-muted-foreground"
+        className={`w-[72px] shrink-0 text-[11px] leading-none transition-colors ${
+          isModified
+            ? "font-medium text-foreground/90"
+            : "text-muted-foreground"
         }`}
       >
         {param.label}
@@ -98,17 +104,11 @@ export function ParamSlider({
           onDoubleClick={handleDoubleClick}
           onPointerDown={() => setShowTooltip(true)}
           onPointerUp={() => setShowTooltip(false)}
-          className="relative flex w-full touch-none items-center select-none h-4"
+          className="relative flex h-4 w-full touch-none select-none items-center"
         >
-          <SliderPrimitive.Track
-            className={`relative h-[3px] w-full overflow-hidden rounded-full transition-colors duration-300 ${
-              flashActive ? "bg-[#007AFF]/20" : "bg-[#E5E5EA]"
-            }`}
-          >
+          <SliderPrimitive.Track className="relative h-[3px] w-full overflow-hidden rounded-full bg-border">
             <SliderPrimitive.Range
-              className={`absolute h-full transition-colors duration-300 ${
-                flashActive ? "bg-[#007AFF]" : "bg-[#007AFF]"
-              }`}
+              className="absolute h-full bg-primary/70 transition-colors"
               style={{
                 // For bipolar sliders (min < 0), range should start from center
                 ...(param.min < 0
@@ -128,10 +128,10 @@ export function ParamSlider({
             />
           </SliderPrimitive.Track>
 
-          <SliderPrimitive.Thumb className="block h-3 w-3 rounded-full border border-[#007AFF] bg-card shadow-sm ring-0 transition-shadow hover:shadow-md focus-visible:outline-none focus-visible:ring-0 cursor-grab active:cursor-grabbing">
+          <SliderPrimitive.Thumb className="block h-3 w-3 cursor-grab rounded-full border-2 border-primary bg-background shadow-[0_0_8px_rgba(108,142,255,0.3)] ring-0 transition-shadow hover:shadow-[0_0_12px_rgba(108,142,255,0.5)] focus-visible:outline-none focus-visible:ring-0 active:cursor-grabbing">
             {/* Value tooltip */}
             {showTooltip && (
-              <div className="absolute bottom-full left-1/2 mb-2 -translate-x-1/2 rounded-md bg-foreground px-1.5 py-0.5 text-[10px] font-mono text-primary-foreground whitespace-nowrap">
+              <div className="absolute bottom-full left-1/2 mb-2 -translate-x-1/2 whitespace-nowrap rounded-md bg-foreground px-2 py-0.5 font-mono text-[10px] text-background shadow-lg">
                 {formatValue(value, param)}
               </div>
             )}
@@ -141,7 +141,7 @@ export function ParamSlider({
         {/* AI recommended dot */}
         {aiDotPosition !== null && (
           <div
-            className="pointer-events-none absolute top-1/2 h-[5px] w-[5px] -translate-x-1/2 -translate-y-1/2 rounded-full bg-[#007AFF]"
+            className="pointer-events-none absolute top-1/2 h-[5px] w-[5px] -translate-x-1/2 -translate-y-1/2 rounded-full bg-primary shadow-[0_0_6px_rgba(108,142,255,0.6)]"
             style={{ left: `${aiDotPosition}%`, marginTop: "6px" }}
           />
         )}
@@ -155,12 +155,16 @@ export function ParamSlider({
           onChange={(e) => setInputValue(e.target.value)}
           onBlur={handleInputConfirm}
           onKeyDown={handleKeyDown}
-          className="w-[52px] shrink-0 rounded-[4px] bg-secondary px-1.5 py-0.5 text-right font-mono text-[11px] text-foreground outline-none ring-1 ring-primary/30"
+          className="w-[48px] shrink-0 rounded-md bg-secondary px-1.5 py-0.5 text-right font-mono text-[11px] text-foreground outline-none ring-1 ring-primary/30"
         />
       ) : (
         <button
           onClick={handleInputStart}
-          className="w-[52px] shrink-0 rounded-[4px] bg-secondary/60 px-1.5 py-0.5 text-right font-mono text-[11px] text-foreground transition-colors hover:bg-secondary"
+          className={`w-[48px] shrink-0 rounded-md px-1.5 py-0.5 text-right font-mono text-[11px] transition-colors ${
+            isModified
+              ? "text-foreground/90 hover:bg-secondary"
+              : "text-muted-foreground hover:bg-secondary"
+          }`}
         >
           {formatValue(value, param)}
         </button>

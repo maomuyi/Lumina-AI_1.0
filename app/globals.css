@@ -4,55 +4,79 @@
 @custom-variant dark (&:is(.dark *));
 
 :root {
-  /* Apple-style light professional palette */
-  --background: #F5F5F7;
-  --foreground: #1D1D1F;
-  --card: #FFFFFF;
-  --card-foreground: #1D1D1F;
-  --popover: #FFFFFF;
-  --popover-foreground: #1D1D1F;
-  --primary: #007AFF;
+  /* --- Dark AI-forward professional palette --- */
+  /* Core: near-black base with cool undertone */
+  --background: #0A0A0F;
+  --foreground: #EEEEF0;
+  --card: #131318;
+  --card-foreground: #EEEEF0;
+  --popover: #131318;
+  --popover-foreground: #EEEEF0;
+
+  /* Primary: electric blue-cyan accent */
+  --primary: #6C8EFF;
   --primary-foreground: #FFFFFF;
-  --secondary: #F5F5F7;
-  --secondary-foreground: #1D1D1F;
-  --muted: #F5F5F7;
-  --muted-foreground: #86868B;
-  --accent: #F0F9FF;
-  --accent-foreground: #007AFF;
-  --destructive: #FF3B30;
+
+  /* Secondary: elevated surface */
+  --secondary: #1A1A22;
+  --secondary-foreground: #EEEEF0;
+
+  /* Muted: subdued text and backgrounds */
+  --muted: #1A1A22;
+  --muted-foreground: #6B6B76;
+
+  /* Accent: subtle highlight surface */
+  --accent: #1E1E2A;
+  --accent-foreground: #8B9FFF;
+
+  /* Destructive */
+  --destructive: #FF4D4F;
   --destructive-foreground: #FFFFFF;
-  --border: #E5E5EA;
-  --input: #E5E5EA;
-  --ring: #007AFF;
-  --chart-1: #FF3B30;
-  --chart-2: #34C759;
-  --chart-3: #007AFF;
-  --chart-4: #FF9500;
-  --chart-5: #AF52DE;
-  --radius: 0.5rem;
-  --sidebar: #FFFFFF;
-  --sidebar-foreground: #1D1D1F;
-  --sidebar-primary: #007AFF;
+
+  /* Borders and inputs */
+  --border: #1F1F2A;
+  --input: #1F1F2A;
+  --ring: #6C8EFF;
+
+  /* Charts */
+  --chart-1: #FF6B6B;
+  --chart-2: #51CF66;
+  --chart-3: #6C8EFF;
+  --chart-4: #FFB84D;
+  --chart-5: #CC5DE8;
+
+  --radius: 0.625rem;
+
+  /* Sidebar */
+  --sidebar: #0F0F14;
+  --sidebar-foreground: #EEEEF0;
+  --sidebar-primary: #6C8EFF;
   --sidebar-primary-foreground: #FFFFFF;
-  --sidebar-accent: #F5F5F7;
-  --sidebar-accent-foreground: #1D1D1F;
-  --sidebar-border: #E5E5EA;
-  --sidebar-ring: #007AFF;
+  --sidebar-accent: #1A1A22;
+  --sidebar-accent-foreground: #EEEEF0;
+  --sidebar-border: #1F1F2A;
+  --sidebar-ring: #6C8EFF;
 
   /* Custom tokens */
-  --canvas-bg: #EBEBF0;
-  --success: #34C759;
-  --info: #5AC8FA;
-  --warning: #FF9500;
+  --canvas-bg: #0D0D12;
+  --success: #51CF66;
+  --info: #74C0FC;
+  --warning: #FFB84D;
+  --surface-elevated: #18181F;
+  --glow-primary: rgba(108, 142, 255, 0.12);
+  --glow-primary-strong: rgba(108, 142, 255, 0.25);
 }
 
 @theme inline {
   --font-sans: 'Inter', 'Geist', 'Geist Fallback', system-ui, sans-serif;
-  --font-mono: 'Geist Mono', 'Geist Mono Fallback', monospace;
+  --font-mono: 'Geist Mono', 'Geist Mono Fallback', 'SF Mono', monospace;
   --color-canvas-bg: var(--canvas-bg);
   --color-success: var(--success);
   --color-info: var(--info);
   --color-warning: var(--warning);
+  --color-surface-elevated: var(--surface-elevated);
+  --color-glow-primary: var(--glow-primary);
+  --color-glow-primary-strong: var(--glow-primary-strong);
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-card: var(--card);
@@ -91,11 +115,58 @@
   --color-sidebar-ring: var(--sidebar-ring);
 }
 
+/* Scrollbar styling for dark theme */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #2A2A35;
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #3A3A48;
+}
+
+/* AI shimmer animation */
+@keyframes ai-shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+/* Subtle glow pulse */
+@keyframes glow-pulse {
+  0%, 100% { opacity: 0.5; }
+  50% { opacity: 1; }
+}
+
 @layer base {
   * {
     @apply border-border outline-ring/50;
   }
   body {
     @apply bg-background text-foreground;
+  }
+}
+
+@layer utilities {
+  .ai-shimmer {
+    background: linear-gradient(
+      90deg,
+      transparent 0%,
+      rgba(108, 142, 255, 0.08) 50%,
+      transparent 100%
+    );
+    background-size: 200% 100%;
+    animation: ai-shimmer 2s ease-in-out infinite;
+  }
+  .glow-pulse {
+    animation: glow-pulse 2s ease-in-out infinite;
   }
 }

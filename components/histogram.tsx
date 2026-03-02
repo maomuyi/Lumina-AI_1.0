@@ -17,9 +17,9 @@ export function Histogram({ data }: HistogramProps) {
     const width = 256
     const height = 80
     const channels = [
-      { values: data.r, color: "rgba(255, 59, 48, 0.45)", key: "r" },
-      { values: data.g, color: "rgba(52, 199, 89, 0.45)", key: "g" },
-      { values: data.b, color: "rgba(0, 122, 255, 0.45)", key: "b" },
+      { values: data.r, color: "rgba(255, 107, 107, 0.5)", key: "r" },
+      { values: data.g, color: "rgba(81, 207, 102, 0.5)", key: "g" },
+      { values: data.b, color: "rgba(108, 142, 255, 0.5)", key: "b" },
     ]
 
     return channels.map(({ values, color, key }) => {
@@ -36,8 +36,8 @@ export function Histogram({ data }: HistogramProps) {
 
   if (!data) {
     return (
-      <div className="flex h-20 items-center justify-center rounded-md bg-secondary">
-        <span className="text-[11px] text-muted-foreground">
+      <div className="flex h-20 items-center justify-center rounded-lg bg-secondary ring-1 ring-border">
+        <span className="text-[11px] text-muted-foreground/40">
           等待图像分析...
         </span>
       </div>
@@ -45,8 +45,12 @@ export function Histogram({ data }: HistogramProps) {
   }
 
   return (
-    <div className="overflow-hidden rounded-md bg-[#1D1D1F]">
+    <div className="overflow-hidden rounded-lg bg-background ring-1 ring-border">
       <svg viewBox="0 0 256 80" className="h-20 w-full" preserveAspectRatio="none">
+        {/* Subtle grid lines */}
+        <line x1="0" y1="20" x2="256" y2="20" stroke="rgba(255,255,255,0.04)" strokeWidth="0.5" />
+        <line x1="0" y1="40" x2="256" y2="40" stroke="rgba(255,255,255,0.04)" strokeWidth="0.5" />
+        <line x1="0" y1="60" x2="256" y2="60" stroke="rgba(255,255,255,0.04)" strokeWidth="0.5" />
         {paths}
       </svg>
     </div>

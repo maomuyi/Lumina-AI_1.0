@@ -185,7 +185,7 @@ export default function HomePage() {
         position="bottom-center"
         toastOptions={{
           className:
-            "bg-card text-foreground border border-border shadow-[0_1px_3px_rgba(0,0,0,0.04),0_4px_12px_rgba(0,0,0,0.03)]",
+            "bg-card text-foreground border border-border shadow-[0_4px_24px_rgba(0,0,0,0.4)]",
         }}
       />
 
@@ -199,7 +199,7 @@ export default function HomePage() {
       />
 
       {/* Three-column layout */}
-      <div className="flex flex-1 overflow-hidden gap-px bg-border">
+      <div className="flex flex-1 overflow-hidden">
         {/* Left sidebar */}
         <LeftSidebar
           onFileUpload={handleFileUpload}
