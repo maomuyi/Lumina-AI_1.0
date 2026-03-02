@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useCallback } from "react"
+import { useState, useCallback, useRef, useEffect } from "react"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
 import { ScrollArea } from "@/components/ui/scroll-area"
@@ -8,6 +8,7 @@ import { Histogram } from "@/components/histogram"
 import {
   Maximize2,
   ZoomIn,
+  ZoomOut,
   Camera,
   Sun,
   Aperture,
@@ -18,6 +19,9 @@ import {
   ChevronRight,
   AlertTriangle,
   ImageIcon,
+  Minus,
+  Plus,
+  RotateCcw,
 } from "lucide-react"
 
 export interface ImageDiagnostics {
@@ -44,44 +48,304 @@ interface CenterCanvasProps {
   diagnostics: ImageDiagnostics | null
 }
 
+// Zoom presets
+const ZOOM_STEPS = [0.1, 0.25, 0.33, 0.5, 0.67, 0.75, 1, 1.25, 1.5, 2, 3, 4, 5]
+const MIN_ZOOM = 0.05
+const MAX_ZOOM = 8
+const WHEEL_ZOOM_FACTOR = 0.001
+
+function clampZoom(z: number) {
+  return Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, z))
+}
+
+function snapToStep(z: number, direction: "in" | "out"): number {
+  if (direction === "in") {
+    for (const s of ZOOM_STEPS) {
+      if (s > z + 0.01) return s
+    }
+    return clampZoom(z * 1.25)
+  } else {
+    for (let i = ZOOM_STEPS.length - 1; i >= 0; i--) {
+      if (ZOOM_STEPS[i] < z - 0.01) return ZOOM_STEPS[i]
+    }
+    return clampZoom(z / 1.25)
+  }
+}
+
 export function CenterCanvas({
   imageUrl,
   fileType,
   isAnalyzing,
   diagnostics,
 }: CenterCanvasProps) {
-  const [zoom, setZoom] = useState<"fit" | "100">("fit")
   const [diagOpen, setDiagOpen] = useState(true)
 
-  const toggleZoom = useCallback(() => {
-    setZoom((z) => (z === "fit" ? "100" : "fit"))
+  // Zoom & pan state
+  const [scale, setScale] = useState(1)
+  const [fitScale, setFitScale] = useState(1)
+  const [isFitMode, setIsFitMode] = useState(true)
+  const [pan, setPan] = useState({ x: 0, y: 0 })
+  const [isPanning, setIsPanning] = useState(false)
+  const [naturalSize, setNaturalSize] = useState({ w: 0, h: 0 })
+
+  const containerRef = useRef<HTMLDivElement>(null)
+  const panStartRef = useRef({ x: 0, y: 0, panX: 0, panY: 0 })
+
+  // Compute fit scale when image loads or container resizes
+  const computeFitScale = useCallback(() => {
+    if (!containerRef.current || !naturalSize.w) return 1
+    const rect = containerRef.current.getBoundingClientRect()
+    const padX = 80
+    const padY = 80
+    const availW = rect.width - padX
+    const availH = rect.height - padY
+    const s = Math.min(availW / naturalSize.w, availH / naturalSize.h, 1)
+    return Math.max(s, MIN_ZOOM)
+  }, [naturalSize])
+
+  useEffect(() => {
+    const fs = computeFitScale()
+    setFitScale(fs)
+    if (isFitMode) {
+      setScale(fs)
+      setPan({ x: 0, y: 0 })
+    }
+  }, [computeFitScale, isFitMode])
+
+  // Observe container resize
+  useEffect(() => {
+    const el = containerRef.current
+    if (!el) return
+    const ro = new ResizeObserver(() => {
+      const fs = computeFitScale()
+      setFitScale(fs)
+      if (isFitMode) {
+        setScale(fs)
+        setPan({ x: 0, y: 0 })
+      }
+    })
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [computeFitScale, isFitMode])
+
+  // Image load handler
+  const handleImageLoad = useCallback(
+    (e: React.SyntheticEvent<HTMLImageElement>) => {
+      const img = e.currentTarget
+      setNaturalSize({ w: img.naturalWidth, h: img.naturalHeight })
+      // Reset to fit mode on new image
+      setIsFitMode(true)
+      setPan({ x: 0, y: 0 })
+    },
+    []
+  )
+
+  // Reset on new image
+  useEffect(() => {
+    setIsFitMode(true)
+    setPan({ x: 0, y: 0 })
+    setScale(1)
+  }, [imageUrl])
+
+  // Wheel zoom (pinch-to-zoom on trackpad maps to wheel events)
+  const handleWheel = useCallback(
+    (e: React.WheelEvent) => {
+      if (!containerRef.current || !naturalSize.w) return
+      e.preventDefault()
+
+      const delta = -e.deltaY * WHEEL_ZOOM_FACTOR
+      const rect = containerRef.current.getBoundingClientRect()
+      const cursorX = e.clientX - rect.left - rect.width / 2
+      const cursorY = e.clientY - rect.top - rect.height / 2
+
+      setScale((prev) => {
+        const next = clampZoom(prev * (1 + delta * prev))
+        // Adjust pan so zoom focuses on cursor
+        const ratio = next / prev
+        setPan((p) => ({
+          x: cursorX - ratio * (cursorX - p.x),
+          y: cursorY - ratio * (cursorY - p.y),
+        }))
+        setIsFitMode(false)
+        return next
+      })
+    },
+    [naturalSize]
+  )
+
+  // Mouse drag to pan
+  const handleMouseDown = useCallback(
+    (e: React.MouseEvent) => {
+      // Only pan when zoomed in beyond fit, or on middle button
+      if (e.button === 1 || scale > fitScale + 0.01) {
+        e.preventDefault()
+        setIsPanning(true)
+        panStartRef.current = {
+          x: e.clientX,
+          y: e.clientY,
+          panX: pan.x,
+          panY: pan.y,
+        }
+      }
+    },
+    [scale, fitScale, pan]
+  )
+
+  const handleMouseMove = useCallback(
+    (e: React.MouseEvent) => {
+      if (!isPanning) return
+      const dx = e.clientX - panStartRef.current.x
+      const dy = e.clientY - panStartRef.current.y
+      setPan({
+        x: panStartRef.current.panX + dx,
+        y: panStartRef.current.panY + dy,
+      })
+    },
+    [isPanning]
+  )
+
+  const handleMouseUp = useCallback(() => {
+    setIsPanning(false)
   }, [])
+
+  // Double-click: toggle between fit and 100%
+  const handleDoubleClick = useCallback(
+    (e: React.MouseEvent) => {
+      if (!containerRef.current) return
+
+      if (Math.abs(scale - 1) < 0.01 && !isFitMode) {
+        // At 100% -> go to fit
+        setIsFitMode(true)
+        setScale(fitScale)
+        setPan({ x: 0, y: 0 })
+      } else {
+        // Go to 100% centered on cursor
+        const rect = containerRef.current.getBoundingClientRect()
+        const cursorX = e.clientX - rect.left - rect.width / 2
+        const cursorY = e.clientY - rect.top - rect.height / 2
+        const ratio = 1 / scale
+        setPan({
+          x: cursorX - ratio * (cursorX - pan.x),
+          y: cursorY - ratio * (cursorY - pan.y),
+        })
+        setScale(1)
+        setIsFitMode(false)
+      }
+    },
+    [scale, fitScale, isFitMode, pan]
+  )
+
+  // Toolbar actions
+  const handleFit = useCallback(() => {
+    setIsFitMode(true)
+    setScale(fitScale)
+    setPan({ x: 0, y: 0 })
+  }, [fitScale])
+
+  const handleZoom100 = useCallback(() => {
+    setScale(1)
+    setIsFitMode(false)
+    setPan({ x: 0, y: 0 })
+  }, [])
+
+  const handleZoomIn = useCallback(() => {
+    setScale((prev) => {
+      const next = clampZoom(snapToStep(prev, "in"))
+      setIsFitMode(false)
+      return next
+    })
+  }, [])
+
+  const handleZoomOut = useCallback(() => {
+    setScale((prev) => {
+      const next = clampZoom(snapToStep(prev, "out"))
+      setIsFitMode(false)
+      return next
+    })
+  }, [])
+
+  // Keyboard shortcuts
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return
+      const isMeta = e.metaKey || e.ctrlKey
+
+      if (isMeta && (e.key === "=" || e.key === "+")) {
+        e.preventDefault()
+        handleZoomIn()
+      } else if (isMeta && e.key === "-") {
+        e.preventDefault()
+        handleZoomOut()
+      } else if (isMeta && e.key === "0") {
+        e.preventDefault()
+        handleFit()
+      } else if (isMeta && e.key === "1") {
+        e.preventDefault()
+        handleZoom100()
+      }
+    }
+    window.addEventListener("keydown", handler)
+    return () => window.removeEventListener("keydown", handler)
+  }, [handleZoomIn, handleZoomOut, handleFit, handleZoom100])
+
+  const displayPercent = Math.round(scale * 100)
+  const cursorStyle = isPanning
+    ? "grabbing"
+    : scale > fitScale + 0.01
+      ? "grab"
+      : "default"
 
   return (
     <div className="flex min-w-0 flex-1 flex-col overflow-hidden bg-canvas-bg">
       {/* Image preview area */}
-      <div className="relative flex flex-1 items-center justify-center overflow-auto px-10 py-8">
+      <div
+        ref={containerRef}
+        className="relative flex flex-1 items-center justify-center overflow-hidden"
+        style={{ cursor: cursorStyle }}
+        onWheel={handleWheel}
+        onMouseDown={handleMouseDown}
+        onMouseMove={handleMouseMove}
+        onMouseUp={handleMouseUp}
+        onMouseLeave={handleMouseUp}
+        onDoubleClick={imageUrl ? handleDoubleClick : undefined}
+      >
         {imageUrl ? (
-          <div className="relative">
-            {/* Image with subtle shadow */}
+          <>
+            {/* Transformed image */}
             <img
               src={imageUrl}
               alt="上传的照片"
-              className={`rounded-lg shadow-[0_8px_32px_rgba(0,0,0,0.5)] ring-1 ring-white/5 ${
-                zoom === "fit"
-                  ? "max-h-[calc(100vh-300px)] max-w-[calc(100%-2rem)] object-contain"
-                  : "max-w-none"
-              }`}
+              draggable={false}
+              onLoad={handleImageLoad}
+              className="select-none rounded-lg shadow-[0_8px_32px_rgba(0,0,0,0.5)] ring-1 ring-white/5"
+              style={{
+                transform: `translate(${pan.x}px, ${pan.y}px) scale(${scale})`,
+                transformOrigin: "center center",
+                transition: isPanning ? "none" : "transform 0.2s cubic-bezier(0.25, 0.46, 0.45, 0.94)",
+                maxWidth: "none",
+                width: naturalSize.w || "auto",
+                height: naturalSize.h || "auto",
+                imageRendering: scale > 2 ? "pixelated" : "auto",
+              }}
             />
 
             {/* Zoom controls - floating pill */}
-            <div className="absolute bottom-4 left-1/2 z-10 flex -translate-x-1/2 items-center gap-0.5 rounded-full bg-card/90 px-1 py-0.5 shadow-lg ring-1 ring-border backdrop-blur-md">
+            <div className="absolute bottom-4 left-1/2 z-10 flex -translate-x-1/2 items-center gap-0.5 rounded-full bg-card/90 px-1.5 py-1 shadow-lg ring-1 ring-border backdrop-blur-md">
               <Button
                 variant="ghost"
                 size="sm"
-                onClick={toggleZoom}
-                className={`h-6 rounded-full px-2.5 text-[11px] font-medium transition-all ${
-                  zoom === "fit"
+                onClick={handleZoomOut}
+                className="h-6 w-6 rounded-full p-0 text-muted-foreground hover:text-foreground"
+              >
+                <Minus className="h-3 w-3" />
+              </Button>
+
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={handleFit}
+                className={`h-6 rounded-full px-2 text-[11px] font-medium transition-all ${
+                  isFitMode
                     ? "bg-primary/15 text-primary"
                     : "text-muted-foreground hover:text-foreground"
                 }`}
@@ -89,21 +353,41 @@ export function CenterCanvas({
                 <Maximize2 className="mr-1 h-3 w-3" />
                 Fit
               </Button>
+
+              {/* Zoom percentage indicator */}
+              <button
+                onClick={handleZoom100}
+                className={`flex h-6 min-w-[48px] items-center justify-center rounded-full px-2 text-[11px] font-mono font-medium transition-all ${
+                  Math.abs(scale - 1) < 0.01 && !isFitMode
+                    ? "bg-primary/15 text-primary"
+                    : "text-muted-foreground hover:bg-secondary hover:text-foreground"
+                }`}
+              >
+                {displayPercent}%
+              </button>
+
               <Button
                 variant="ghost"
                 size="sm"
-                onClick={toggleZoom}
-                className={`h-6 rounded-full px-2.5 text-[11px] font-medium transition-all ${
-                  zoom === "100"
-                    ? "bg-primary/15 text-primary"
-                    : "text-muted-foreground hover:text-foreground"
-                }`}
+                onClick={handleZoomIn}
+                className="h-6 w-6 rounded-full p-0 text-muted-foreground hover:text-foreground"
               >
-                <ZoomIn className="mr-1 h-3 w-3" />
-                100%
+                <Plus className="h-3 w-3" />
               </Button>
+
+              {/* Reset pan */}
+              {(Math.abs(pan.x) > 2 || Math.abs(pan.y) > 2) && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setPan({ x: 0, y: 0 })}
+                  className="h-6 w-6 rounded-full p-0 text-muted-foreground hover:text-foreground"
+                >
+                  <RotateCcw className="h-3 w-3" />
+                </Button>
+              )}
             </div>
-          </div>
+          </>
         ) : (
           /* Empty state */
           <div className="flex flex-col items-center gap-4">
@@ -202,13 +486,15 @@ export function CenterCanvas({
                         {diagnostics.deadBlackPercent > 3 && (
                           <span className="flex items-center gap-1 rounded-md bg-info/10 px-1.5 py-0.5 text-[10px] font-medium text-info">
                             <AlertTriangle className="h-2.5 w-2.5" />
-                            死黑 {diagnostics.deadBlackPercent.toFixed(1)}%
+                            {"死黑 "}
+                            {diagnostics.deadBlackPercent.toFixed(1)}%
                           </span>
                         )}
                         {diagnostics.deadWhitePercent > 5 && (
                           <span className="flex items-center gap-1 rounded-md bg-destructive/10 px-1.5 py-0.5 text-[10px] font-medium text-destructive">
                             <AlertTriangle className="h-2.5 w-2.5" />
-                            死白 {diagnostics.deadWhitePercent.toFixed(1)}%
+                            {"死白 "}
+                            {diagnostics.deadWhitePercent.toFixed(1)}%
                           </span>
                         )}
                         {diagnostics.deadBlackPercent <= 3 &&
