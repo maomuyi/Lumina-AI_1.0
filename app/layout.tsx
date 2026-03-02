@@ -9,7 +9,7 @@ const inter = Inter({
 })
 
 export const metadata: Metadata = {
-  title: 'ChromaLens - AI 智能调色工具',
+  title: 'Lumina AI - 智能调色工具',
   description: '专业级 AI 照片调色工具，智能分析图片并生成 Lightroom 预设参数',
   generator: 'v0.app',
   icons: {

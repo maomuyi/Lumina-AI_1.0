@@ -3,7 +3,8 @@
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Progress } from "@/components/ui/progress"
-import { Download, Aperture } from "lucide-react"
+import Image from "next/image"
+import { Download } from "lucide-react"
 
 interface TopToolbarProps {
   fileName: string | null
@@ -33,10 +34,16 @@ export function TopToolbar({
       )}
 
       {/* Left: Logo */}
-      <div className="flex items-center gap-2 px-4">
-        <Aperture className="h-[18px] w-[18px] text-primary" />
+      <div className="flex items-center gap-2.5 px-4">
+        <Image
+          src="/images/lumina-logo.jpg"
+          alt="Lumina AI"
+          width={22}
+          height={22}
+          className="rounded-[5px]"
+        />
         <span className="text-[13px] font-semibold tracking-tight text-foreground">
-          ChromaLens
+          Lumina AI
         </span>
       </div>
 

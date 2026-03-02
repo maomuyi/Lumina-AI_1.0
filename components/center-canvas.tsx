@@ -15,6 +15,7 @@ import {
   Aperture,
   Timer,
   Palette,
+  FileImage,
   ChevronDown,
   ChevronRight,
   AlertTriangle,
@@ -63,24 +64,6 @@ export function CenterCanvas({
       <div className="relative flex flex-1 items-center justify-center overflow-auto p-6">
         {imageUrl ? (
           <div className="relative">
-            {/* Format badge */}
-            <div className="absolute left-3 top-3 z-10">
-              <Badge
-                className="rounded-md border-0 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-card-foreground backdrop-blur-md"
-                style={{ backgroundColor: "rgba(255,255,255,0.72)" }}
-              >
-                {fileType === "nef" ? "RAW" : "JPG"}
-              </Badge>
-              {fileType === "nef" && (
-                <Badge
-                  className="ml-1.5 rounded-md border-0 px-1.5 py-0.5 text-[10px] font-medium text-card-foreground backdrop-blur-md"
-                  style={{ backgroundColor: "rgba(255,255,255,0.72)" }}
-                >
-                  16-bit
-                </Badge>
-              )}
-            </div>
-
             {/* Image */}
             <img
               src={imageUrl}
@@ -163,6 +146,15 @@ export function CenterCanvas({
                         基础信息
                       </h4>
                       <div className="space-y-1.5">
+                        <InfoRow
+                          icon={<FileImage className="h-3 w-3" />}
+                          label="格式"
+                          value={
+                            fileType === "nef"
+                              ? "RAW (NEF) / 16-bit"
+                              : "JPEG / 8-bit"
+                          }
+                        />
                         <InfoRow
                           icon={<Camera className="h-3 w-3" />}
                           label="相机"
