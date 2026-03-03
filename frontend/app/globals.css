@@ -1,0 +1,172 @@
+@import 'tailwindcss';
+@import 'tw-animate-css';
+
+@custom-variant dark (&:is(.dark *));
+
+:root {
+  /* --- Dark AI-forward professional palette --- */
+  /* Core: near-black base with cool undertone */
+  --background: #0A0A0F;
+  --foreground: #EEEEF0;
+  --card: #131318;
+  --card-foreground: #EEEEF0;
+  --popover: #131318;
+  --popover-foreground: #EEEEF0;
+
+  /* Primary: electric blue-cyan accent */
+  --primary: #6C8EFF;
+  --primary-foreground: #FFFFFF;
+
+  /* Secondary: elevated surface */
+  --secondary: #1A1A22;
+  --secondary-foreground: #EEEEF0;
+
+  /* Muted: subdued text and backgrounds */
+  --muted: #1A1A22;
+  --muted-foreground: #6B6B76;
+
+  /* Accent: subtle highlight surface */
+  --accent: #1E1E2A;
+  --accent-foreground: #8B9FFF;
+
+  /* Destructive */
+  --destructive: #FF4D4F;
+  --destructive-foreground: #FFFFFF;
+
+  /* Borders and inputs */
+  --border: #1F1F2A;
+  --input: #1F1F2A;
+  --ring: #6C8EFF;
+
+  /* Charts */
+  --chart-1: #FF6B6B;
+  --chart-2: #51CF66;
+  --chart-3: #6C8EFF;
+  --chart-4: #FFB84D;
+  --chart-5: #CC5DE8;
+
+  --radius: 0.625rem;
+
+  /* Sidebar */
+  --sidebar: #0F0F14;
+  --sidebar-foreground: #EEEEF0;
+  --sidebar-primary: #6C8EFF;
+  --sidebar-primary-foreground: #FFFFFF;
+  --sidebar-accent: #1A1A22;
+  --sidebar-accent-foreground: #EEEEF0;
+  --sidebar-border: #1F1F2A;
+  --sidebar-ring: #6C8EFF;
+
+  /* Custom tokens */
+  --canvas-bg: #0D0D12;
+  --success: #51CF66;
+  --info: #74C0FC;
+  --warning: #FFB84D;
+  --surface-elevated: #18181F;
+  --glow-primary: rgba(108, 142, 255, 0.12);
+  --glow-primary-strong: rgba(108, 142, 255, 0.25);
+}
+
+@theme inline {
+  --font-sans: 'Inter', 'Geist', 'Geist Fallback', system-ui, sans-serif;
+  --font-mono: 'Geist Mono', 'Geist Mono Fallback', 'SF Mono', monospace;
+  --color-canvas-bg: var(--canvas-bg);
+  --color-success: var(--success);
+  --color-info: var(--info);
+  --color-warning: var(--warning);
+  --color-surface-elevated: var(--surface-elevated);
+  --color-glow-primary: var(--glow-primary);
+  --color-glow-primary-strong: var(--glow-primary-strong);
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+}
+
+/* Scrollbar styling for dark theme */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #2A2A35;
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #3A3A48;
+}
+
+/* AI shimmer animation */
+@keyframes ai-shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+/* Subtle glow pulse */
+@keyframes glow-pulse {
+  0%, 100% { opacity: 0.5; }
+  50% { opacity: 1; }
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+}
+
+@layer utilities {
+  .ai-shimmer {
+    background: linear-gradient(
+      90deg,
+      transparent 0%,
+      rgba(108, 142, 255, 0.08) 50%,
+      transparent 100%
+    );
+    background-size: 200% 100%;
+    animation: ai-shimmer 2s ease-in-out infinite;
+  }
+  .glow-pulse {
+    animation: glow-pulse 2s ease-in-out infinite;
+  }
+}
