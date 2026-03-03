@@ -1,0 +1,34 @@
+.DS_Store
+
+# Node
+node_modules/
+**/node_modules/
+
+# Frontend build/cache
+frontend/.next/
+frontend/.turbo/
+frontend/tsconfig.tsbuildinfo
+frontend/wasm/build_*/
+frontend/wasm/build_release/
+frontend/wasm/build_debug/
+frontend/public/wasm/
+
+# Backend build/runtime
+backend/dist/
+backend/tmp/
+
+# Generic outputs
+**/dist/
+**/tmp/
+*.log
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# Legacy local SDK clone (replaced by git submodule)
+emsdk/
+
+# Workspace artifacts
+.pnpm-store/
