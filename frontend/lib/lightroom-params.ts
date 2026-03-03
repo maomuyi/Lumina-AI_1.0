@@ -22,12 +22,12 @@ export const LIGHTROOM_GROUPS: LightroomGroup[] = [
     params: [
       { key: "Temperature", label: "色温", min: 2000, max: 50000, step: 50, defaultValue: 5500, unit: "K" },
       { key: "Tint", label: "色调", min: -150, max: 150, step: 1, defaultValue: 0 },
-      { key: "Exposure", label: "曝光", min: -5, max: 5, step: 0.01, defaultValue: 0 },
-      { key: "Contrast", label: "对比度", min: -100, max: 100, step: 1, defaultValue: 0 },
-      { key: "Highlights", label: "高光", min: -100, max: 100, step: 1, defaultValue: 0 },
-      { key: "Shadows", label: "阴影", min: -100, max: 100, step: 1, defaultValue: 0 },
-      { key: "Whites", label: "白色", min: -100, max: 100, step: 1, defaultValue: 0 },
-      { key: "Blacks", label: "黑色", min: -100, max: 100, step: 1, defaultValue: 0 },
+      { key: "Exposure2012", label: "曝光", min: -5, max: 5, step: 0.01, defaultValue: 0 },
+      { key: "Contrast2012", label: "对比度", min: -100, max: 100, step: 1, defaultValue: 0 },
+      { key: "Highlights2012", label: "高光", min: -100, max: 100, step: 1, defaultValue: 0 },
+      { key: "Shadows2012", label: "阴影", min: -100, max: 100, step: 1, defaultValue: 0 },
+      { key: "Whites2012", label: "白色", min: -100, max: 100, step: 1, defaultValue: 0 },
+      { key: "Blacks2012", label: "黑色", min: -100, max: 100, step: 1, defaultValue: 0 },
     ],
   },
   {
@@ -45,7 +45,7 @@ export const LIGHTROOM_GROUPS: LightroomGroup[] = [
     label: "偏好",
     params: [
       { key: "Texture", label: "纹理", min: -100, max: 100, step: 1, defaultValue: 0 },
-      { key: "Clarity", label: "清晰度", min: -100, max: 100, step: 1, defaultValue: 0 },
+      { key: "Clarity2012", label: "清晰度", min: -100, max: 100, step: 1, defaultValue: 0 },
       { key: "Dehaze", label: "去朦胧", min: -100, max: 100, step: 1, defaultValue: 0 },
       { key: "Vibrance", label: "自然饱和度", min: -100, max: 100, step: 1, defaultValue: 0 },
       { key: "Saturation", label: "饱和度", min: -100, max: 100, step: 1, defaultValue: 0 },

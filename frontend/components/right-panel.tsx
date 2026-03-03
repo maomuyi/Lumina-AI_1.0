@@ -9,12 +9,6 @@ import { AiDiagnosticReport } from "@/components/ai-diagnostic-report"
 import { LIGHTROOM_GROUPS } from "@/lib/lightroom-params"
 import type { DiagnosticReport } from "@/lib/image-analysis"
 import {
-  Accordion,
-  AccordionContent,
-  AccordionItem,
-  AccordionTrigger,
-} from "@/components/ui/accordion"
-import {
   Download,
   RefreshCw,
   FileDown,
@@ -24,6 +18,7 @@ import {
   Sparkles,
   Send,
   Info,
+  ChevronRight,
 } from "lucide-react"
 
 type ViewTab = "report" | "params"
@@ -68,7 +63,6 @@ export function RightPanel({
 }: RightPanelProps) {
   const [activeTab, setActiveTab] = useState<ViewTab>("report")
   const [refinementText, setRefinementText] = useState("")
-  const defaultOpenGroups = ["basic", "presence", "tone_curve"]
 
   const handleSendRefinement = () => {
     if (!refinementText.trim()) return
@@ -83,22 +77,20 @@ export function RightPanel({
         <div className="flex shrink-0 border-b border-border">
           <button
             onClick={() => setActiveTab("report")}
-            className={`flex flex-1 items-center justify-center gap-1.5 border-b-2 py-2.5 text-[11px] font-semibold transition-all ${
-              activeTab === "report"
-                ? "border-primary text-primary"
-                : "border-transparent text-muted-foreground hover:text-foreground"
-            }`}
+            className={`flex flex-1 items-center justify-center gap-1.5 border-b-2 py-2.5 text-[11px] font-semibold transition-all ${activeTab === "report"
+              ? "border-primary text-primary"
+              : "border-transparent text-muted-foreground hover:text-foreground"
+              }`}
           >
             <FileText className="h-3 w-3" />
             诊断报告
           </button>
           <button
             onClick={() => setActiveTab("params")}
-            className={`flex flex-1 items-center justify-center gap-1.5 border-b-2 py-2.5 text-[11px] font-semibold transition-all ${
-              activeTab === "params"
-                ? "border-primary text-primary"
-                : "border-transparent text-muted-foreground hover:text-foreground"
-            }`}
+            className={`flex flex-1 items-center justify-center gap-1.5 border-b-2 py-2.5 text-[11px] font-semibold transition-all ${activeTab === "params"
+              ? "border-primary text-primary"
+              : "border-transparent text-muted-foreground hover:text-foreground"
+              }`}
           >
             <SlidersHorizontal className="h-3 w-3" />
             参数调节
@@ -121,52 +113,36 @@ export function RightPanel({
             </div>
           )}
 
-          {/* Params Tab */}
+          {/* Params Tab — Lightroom 风格 */}
           {activeTab === "params" && hasAnalysis && (
-            <div className="p-4">
-              <Accordion
-                type="multiple"
-                defaultValue={defaultOpenGroups}
-                className="space-y-0"
-              >
-                {LIGHTROOM_GROUPS.map((group) => {
-                  const hasAiMods = group.params.some((p) =>
-                    aiModifiedKeys.has(p.key)
-                  )
-                  return (
-                    <AccordionItem
-                      key={group.key}
-                      value={group.key}
-                      className="border-b border-border/50"
-                    >
-                      <AccordionTrigger className="py-2.5 text-[12px] font-semibold text-foreground/90 hover:text-foreground hover:no-underline [&>svg]:h-3 [&>svg]:w-3 [&>svg]:text-muted-foreground">
-                        <div className="flex items-center gap-2">
-                          {group.label}
-                          {hasAiMods && (
-                            <span className="h-1.5 w-1.5 rounded-full bg-primary shadow-[0_0_6px_rgba(108,142,255,0.6)]" />
-                          )}
-                        </div>
-                      </AccordionTrigger>
-                      <AccordionContent className="pb-2 pt-0">
-                        <div className="space-y-0">
-                          {group.params.map((param) => (
-                            <ParamSlider
-                              key={param.key}
-                              param={param}
-                              value={params[param.key] ?? param.defaultValue}
-                              aiRecommendedValue={
-                                aiRecommendedParams?.[param.key]
-                              }
-                              isAiModified={aiModifiedKeys.has(param.key)}
-                              onChange={onParamChange}
-                            />
-                          ))}
-                        </div>
-                      </AccordionContent>
-                    </AccordionItem>
-                  )
-                })}
-              </Accordion>
+            <div className="pt-1">
+              {LIGHTROOM_GROUPS.map((group) => {
+                const hasAiMods = group.params.some((p) =>
+                  aiModifiedKeys.has(p.key)
+                )
+                return (
+                  <ParamGroup
+                    key={group.key}
+                    groupKey={group.key}
+                    label={group.label}
+                    hasAiMods={hasAiMods}
+                    defaultOpen={["basic", "presence", "tone_curve"].includes(group.key)}
+                  >
+                    {group.params.map((param) => (
+                      <ParamSlider
+                        key={param.key}
+                        param={param}
+                        value={params[param.key] ?? param.defaultValue}
+                        aiRecommendedValue={
+                          aiRecommendedParams?.[param.key]
+                        }
+                        isAiModified={aiModifiedKeys.has(param.key)}
+                        onChange={onParamChange}
+                      />
+                    ))}
+                  </ParamGroup>
+                )
+              })}
             </div>
           )}
         </div>
@@ -263,6 +239,45 @@ export function RightPanel({
         </div>
       )}
     </aside>
+  )
+}
+
+/**
+ * Lightroom 风格的可折叠参数组
+ * 三角形 toggle + 紧凑 header + AI 修改指示点
+ */
+function ParamGroup({
+  groupKey,
+  label,
+  hasAiMods,
+  defaultOpen = false,
+  children,
+}: {
+  groupKey: string
+  label: string
+  hasAiMods: boolean
+  defaultOpen?: boolean
+  children: React.ReactNode
+}) {
+  const [open, setOpen] = useState(defaultOpen)
+
+  return (
+    <div className="border-b border-white/[0.06]" data-group={groupKey}>
+      <button
+        onClick={() => setOpen(!open)}
+        className="flex w-full items-center gap-1.5 px-3 py-[6px] text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/70 transition-colors hover:text-foreground/80"
+      >
+        <ChevronRight
+          className={`h-3 w-3 shrink-0 transition-transform duration-150 ${open ? "rotate-90" : ""
+            }`}
+        />
+        {label}
+        {hasAiMods && (
+          <span className="ml-1 h-1.5 w-1.5 rounded-full bg-primary shadow-[0_0_6px_rgba(108,142,255,0.6)]" />
+        )}
+      </button>
+      {open && <div className="pb-1">{children}</div>}
+    </div>
   )
 }
 

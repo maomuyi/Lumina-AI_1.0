@@ -28,7 +28,8 @@ backend/tmp/
 !.env.example
 
 # Legacy local SDK clone (replaced by git submodule)
-emsdk/
+/emsdk/
+!third_party/emsdk/
 
 # Workspace artifacts
 .pnpm-store/

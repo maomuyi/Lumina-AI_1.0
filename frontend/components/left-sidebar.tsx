@@ -24,6 +24,8 @@ interface LeftSidebarProps {
   selectedStyle: string
   onStyleChange: (style: string) => void
   onAnalyze: () => void
+  canAnalyze: boolean
+  analyzeDisabledReason?: string | null
   isAnalyzing: boolean
   analysisStage: { stage: number; message: string } | null
   uploadedFileName: string | null
@@ -39,6 +41,8 @@ export function LeftSidebar({
   selectedStyle,
   onStyleChange,
   onAnalyze,
+  canAnalyze,
+  analyzeDisabledReason,
   isAnalyzing,
   analysisStage,
   uploadedFileName,
@@ -205,7 +209,7 @@ export function LeftSidebar({
             {/* Analyze button with staged loading */}
             <Button
               onClick={onAnalyze}
-              disabled={!uploadedFileName || isAnalyzing}
+              disabled={!canAnalyze || isAnalyzing}
               className="mt-3 h-10 w-full rounded-lg bg-primary text-[12px] font-semibold text-primary-foreground shadow-[0_0_20px_rgba(108,142,255,0.2)] transition-all hover:bg-primary/90 hover:shadow-[0_0_30px_rgba(108,142,255,0.3)] disabled:opacity-30 disabled:shadow-none"
             >
               {isAnalyzing ? (
@@ -220,6 +224,12 @@ export function LeftSidebar({
                 </>
               )}
             </Button>
+
+            {!canAnalyze && analyzeDisabledReason && (
+              <p className="mt-2 text-[10px] leading-relaxed text-muted-foreground/55">
+                {analyzeDisabledReason}
+              </p>
+            )}
 
             {/* Staged loading indicator */}
             {isAnalyzing && analysisStage && (

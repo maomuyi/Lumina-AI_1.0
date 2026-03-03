@@ -1,0 +1,11 @@
+{
+  "name": "lumina",
+  "private": true,
+  "packageManager": "pnpm@10.15.0",
+  "scripts": {
+    "dev": "pnpm --parallel --filter lumina-frontend --filter lumina-backend dev",
+    "build": "pnpm --filter lumina-frontend --filter lumina-backend build",
+    "lint": "pnpm --filter lumina-frontend --filter lumina-backend lint",
+    "typecheck": "pnpm --filter lumina-frontend --filter lumina-backend typecheck"
+  }
+}
