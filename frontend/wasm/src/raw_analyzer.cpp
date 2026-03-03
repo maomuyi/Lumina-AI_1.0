@@ -62,6 +62,25 @@ static std::string jf(float v, int decimals = 4) {
     return buf;
 }
 
+/** 兼容不同 LibRaw 版本：推断 RAW 位深（优先 raw_bps，退化到 white level 反推） */
+static int detect_raw_bit_depth() {
+    const libraw_colordata_t& color = g_processor.imgdata.color;
+    const int raw_bps = static_cast<int>(color.raw_bps);
+    if (raw_bps > 0 && raw_bps <= 24) {
+        return raw_bps;
+    }
+
+    int white_level = static_cast<int>(color.maximum);
+    if (white_level <= 0) white_level = static_cast<int>(color.data_maximum);
+    if (white_level <= 0) white_level = 16383; // fallback: 14-bit
+
+    int bits = 0;
+    while (bits < 24 && ((1 << bits) - 1) < white_level) {
+        ++bits;
+    }
+    return std::max(8, bits);
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // 公开 C API
 // ─────────────────────────────────────────────────────────────────────────────
@@ -95,7 +114,7 @@ int lra_open_buffer(const uint8_t* data, size_t size) {
     // ── 步骤 3：提取内嵌预览 JPEG ────────────────────────────────────────────
     ret = g_processor.unpack_thumb();
     if (ret == LIBRAW_SUCCESS) {
-        LibRaw_thumbnail& thumb = g_processor.imgdata.thumbnail;
+        libraw_thumbnail_t& thumb = g_processor.imgdata.thumbnail;
         if (thumb.tformat == LIBRAW_THUMBNAIL_JPEG && thumb.tlength > 0) {
             g_preview_buf.assign(
                 reinterpret_cast<const uchar*>(thumb.thumb),
@@ -131,6 +150,7 @@ const char* lra_get_exif_json() {
     const libraw_iparams_t&   ip  = g_processor.imgdata.idata;
     const libraw_imgother_t&  io  = g_processor.imgdata.other;
     const libraw_image_sizes_t& is = g_processor.imgdata.sizes;
+    const int bit_depth = detect_raw_bit_depth();
 
     // 快门速度格式化（分数表示）
     std::string shutter_str;
@@ -155,7 +175,7 @@ const char* lra_get_exif_json() {
        << "\"shutter\":"        << json_escape(shutter_str.c_str()) << ","
        << "\"aperture\":"       << jf(io.aperture, 1)           << ","
        << "\"focal_length\":"   << jf(io.focal_len, 1)          << ","
-       << "\"raw_bits\":"       << static_cast<int>(ip.raw_bits) << ","
+       << "\"raw_bits\":"       << bit_depth << ","
        << "\"width\":"          << static_cast<int>(is.raw_width) << ","
        << "\"height\":"         << static_cast<int>(is.raw_height)
        << "}";
@@ -192,8 +212,8 @@ const char* lra_get_exif_json() {
 EMSCRIPTEN_KEEPALIVE
 const char* lra_get_physics_json() {
     const libraw_colordata_t& color = g_processor.imgdata.color;
-    const libraw_iparams_t&   ip    = g_processor.imgdata.idata;
     const libraw_image_sizes_t& sz  = g_processor.imgdata.sizes;
+    const int bit_depth = detect_raw_bit_depth();
 
     // ── 获取 RAW 像素矩阵 ─────────────────────────────────────────────────────
     const ushort* raw = g_processor.imgdata.rawdata.raw_image;
@@ -208,7 +228,7 @@ const char* lra_get_physics_json() {
     // color.maximum 是 LibRaw 计算的有效最大值；若为 0，退回到理论最大值
     int white_level = color.maximum;
     if (white_level <= 0) {
-        white_level = (1 << ip.raw_bits) - 1;  // 14-bit → 16383
+        white_level = (1 << bit_depth) - 1;
     }
 
     // ── 黑场阈值（用于 shadow_survival_rate 计算） ─────────────────────────────
@@ -299,7 +319,7 @@ const char* lra_get_physics_json() {
            << jf(mul[2], 4) << ","        // G2
            << jf(mul[3], 4)               // B
        << "],"
-       << "\"bit_depth\":"                << static_cast<int>(ip.raw_bits)                  << ","
+       << "\"bit_depth\":"                << bit_depth                                       << ","
        << "\"banding_risk\":"             << json_escape(banding_risk.c_str())
        << "}";
 
@@ -352,12 +372,12 @@ const char* lra_get_linear_histogram_json(int bins) {
     }
 
     const libraw_colordata_t&   color = g_processor.imgdata.color;
-    const libraw_iparams_t&     ip    = g_processor.imgdata.idata;
     const libraw_image_sizes_t& sz    = g_processor.imgdata.sizes;
+    const int bit_depth = detect_raw_bit_depth();
 
     // ── 白点与黑场 ────────────────────────────────────────────────────────────
     int white_level = color.maximum;
-    if (white_level <= 0) white_level = (1 << ip.raw_bits) - 1;
+    if (white_level <= 0) white_level = (1 << bit_depth) - 1;
 
     int black_level = color.black;
     for (int c = 0; c < 4; ++c) {
@@ -408,7 +428,7 @@ const char* lra_get_linear_histogram_json(int bins) {
     std::ostringstream ss;
     ss << "{"
        << "\"bins\":"         << bins         << ","
-       << "\"bit_depth\":"    << ip.raw_bits  << ","
+       << "\"bit_depth\":"    << bit_depth  << ","
        << "\"white_level\":"  << white_level  << ","
        << "\"black_level\":"  << black_level  << ","
        << "\"total_pixels\":" << total_pixels << ","

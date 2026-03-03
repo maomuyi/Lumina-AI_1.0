@@ -39,6 +39,11 @@ file(GLOB_RECURSE LIBRAW_SOURCES "${libraw_SOURCE_DIR}/src/*.cpp")
 list(FILTER LIBRAW_SOURCES EXCLUDE REGEX ".*/integration/.*")
 list(FILTER LIBRAW_SOURCES EXCLUDE REGEX ".*/x3f/.*")
 list(FILTER LIBRAW_SOURCES EXCLUDE REGEX ".*/write/.*")
+# 在 0.21.x + Emscripten 下，以下文件与 postprocessing_ph.cpp 存在重复定义
+list(FILTER LIBRAW_SOURCES EXCLUDE REGEX ".*/postprocessing/mem_image\\.cpp$")
+list(FILTER LIBRAW_SOURCES EXCLUDE REGEX ".*/postprocessing/aspect_ratio\\.cpp$")
+# 仅回补最小写出桩函数，满足 link 依赖（不启用实际文件写出）
+list(APPEND LIBRAW_SOURCES "${libraw_SOURCE_DIR}/src/write/write_ph.cpp")
 
 # ── 3. 构建 LibRaw 静态库 ──────────────────────────────────────────────────────
 add_library(libraw_static STATIC ${LIBRAW_SOURCES})
@@ -49,7 +54,6 @@ target_include_directories(libraw_static PUBLIC
 
 target_compile_definitions(libraw_static PUBLIC
   LIBRAW_NOTHREADS             # 浏览器单线程环境，禁用 POSIX 线程
-  LIBRAW_WIN32_CALLS=0         # 非 Windows
 )
 
 # ── 4. 构建我们的 WASM 导出模块 ───────────────────────────────────────────────

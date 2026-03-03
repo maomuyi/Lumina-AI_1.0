@@ -21,6 +21,8 @@ import { cleanupExpiredXmpFiles, ensureXmpDir, XMP_DIR, XMP_FILE_TTL_SECONDS } f
 
 const PORT = parseInt(process.env.PORT || '3001', 10);
 const HOST = process.env.HOST || '0.0.0.0';
+const ANALYZE_MAX_FILE_SIZE_MB = parseInt(process.env.ANALYZE_MAX_FILE_SIZE_MB || '50', 10);
+const ANALYZE_MAX_FILE_SIZE_BYTES = Math.max(1, ANALYZE_MAX_FILE_SIZE_MB) * 1024 * 1024;
 const DEFAULT_CORS_ORIGINS = ['http://localhost:*', 'http://127.0.0.1:*'];
 
 function escapeRegExp(input: string): string {
@@ -73,8 +75,8 @@ async function main() {
                 options: { colorize: true },
             },
         },
-        // 提升 body 大小限制（预览图 base64 可达 ~3MB）
-        bodyLimit: 10 * 1024 * 1024, // 10MB
+        // 提升 body 大小限制（允许高分辨率 JPG 预览上送）
+        bodyLimit: ANALYZE_MAX_FILE_SIZE_BYTES + 5 * 1024 * 1024,
     });
 
     // ── CORS（允许前端 localhost:3000 跨域） ────────────────────────────
@@ -87,7 +89,7 @@ async function main() {
     // ── Multipart 支持（用于上传预览图） ────────────────────────────────
     await fastify.register(multipart, {
         limits: {
-            fileSize: 5 * 1024 * 1024, // 单文件 5MB（预览图一般 1~2MB）
+            fileSize: ANALYZE_MAX_FILE_SIZE_BYTES,
             files: 1,
         },
     });
