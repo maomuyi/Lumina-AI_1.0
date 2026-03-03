@@ -6,14 +6,26 @@ import { Textarea } from "@/components/ui/textarea"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Upload, ImageIcon, Sparkles, Loader2 } from "lucide-react"
 
+const STYLE_PRESETS = [
+  { key: "auto", label: "AI 智能匹配" },
+  { key: "japanese", label: "日系清新" },
+  { key: "film", label: "胶片质感" },
+  { key: "cyberpunk", label: "赛博朋克" },
+  { key: "grey", label: "高级灰" },
+  { key: "cinematic", label: "电影感" },
+]
+
 interface LeftSidebarProps {
   onFileUpload: (file: File) => void
   selectedPlatform: string
   onPlatformChange: (platform: string) => void
   userIntent: string
   onUserIntentChange: (intent: string) => void
+  selectedStyle: string
+  onStyleChange: (style: string) => void
   onAnalyze: () => void
   isAnalyzing: boolean
+  analysisStage: { stage: number; message: string } | null
   uploadedFileName: string | null
   uploadedFileType: string | null
 }
@@ -24,8 +36,11 @@ export function LeftSidebar({
   onPlatformChange,
   userIntent,
   onUserIntentChange,
+  selectedStyle,
+  onStyleChange,
   onAnalyze,
   isAnalyzing,
+  analysisStage,
   uploadedFileName,
   uploadedFileType,
 }: LeftSidebarProps) {
@@ -112,7 +127,6 @@ export function LeftSidebar({
             </p>
           </div>
 
-          {/* Divider */}
           <div className="mx-4 h-px bg-border" />
 
           {/* Platform Selection */}
@@ -137,7 +151,7 @@ export function LeftSidebar({
                 disabled
                 className="flex-1 cursor-not-allowed rounded-md px-3 py-1.5 text-[12px] font-medium text-muted-foreground/30"
               >
-                像素蛋糕
+                {"像素蛋糕 "}
                 <span className="ml-1 rounded-sm bg-primary/10 px-1 text-[9px] text-primary/50">
                   SOON
                 </span>
@@ -145,7 +159,32 @@ export function LeftSidebar({
             </div>
           </div>
 
-          {/* Divider */}
+          <div className="mx-4 h-px bg-border" />
+
+          {/* Style Presets */}
+          <div className="p-4">
+            <div className="mb-3 flex items-center gap-2">
+              <span className="text-[11px] font-semibold uppercase tracking-widest text-muted-foreground">
+                风格预设
+              </span>
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              {STYLE_PRESETS.map((preset) => (
+                <button
+                  key={preset.key}
+                  onClick={() => onStyleChange(preset.key)}
+                  className={`rounded-lg px-2.5 py-1.5 text-[11px] font-medium transition-all ${
+                    selectedStyle === preset.key
+                      ? "bg-primary/15 text-primary ring-1 ring-primary/25"
+                      : "bg-secondary/60 text-muted-foreground ring-1 ring-border hover:bg-secondary hover:text-foreground"
+                  }`}
+                >
+                  {preset.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
           <div className="mx-4 h-px bg-border" />
 
           {/* AI Intent */}
@@ -157,15 +196,17 @@ export function LeftSidebar({
               <Sparkles className="h-3 w-3 text-primary/40" />
             </div>
             <Textarea
-              placeholder={"描述想要的氛围或色彩倾向...\n例如：日系清新、电影感、赛博朋克"}
+              placeholder={"描述想要的氛围或色彩倾向...\n例如：把天空调蓝一点，人脸亮一点"}
               value={userIntent}
               onChange={(e) => onUserIntentChange(e.target.value)}
-              className="min-h-[80px] resize-none rounded-lg border-border bg-secondary/40 text-[12px] text-foreground placeholder:text-muted-foreground/30 focus-visible:border-primary/30 focus-visible:ring-1 focus-visible:ring-primary/20"
+              className="min-h-[72px] resize-none rounded-lg border-border bg-secondary/40 text-[12px] text-foreground placeholder:text-muted-foreground/30 focus-visible:border-primary/30 focus-visible:ring-1 focus-visible:ring-primary/20"
             />
+
+            {/* Analyze button with staged loading */}
             <Button
               onClick={onAnalyze}
               disabled={!uploadedFileName || isAnalyzing}
-              className="mt-3 h-9 w-full rounded-lg bg-primary text-[12px] font-semibold text-primary-foreground shadow-[0_0_20px_rgba(108,142,255,0.2)] transition-all hover:bg-primary/90 hover:shadow-[0_0_30px_rgba(108,142,255,0.3)] disabled:opacity-30 disabled:shadow-none"
+              className="mt-3 h-10 w-full rounded-lg bg-primary text-[12px] font-semibold text-primary-foreground shadow-[0_0_20px_rgba(108,142,255,0.2)] transition-all hover:bg-primary/90 hover:shadow-[0_0_30px_rgba(108,142,255,0.3)] disabled:opacity-30 disabled:shadow-none"
             >
               {isAnalyzing ? (
                 <>
@@ -175,10 +216,34 @@ export function LeftSidebar({
               ) : (
                 <>
                   <Sparkles className="mr-1.5 h-3.5 w-3.5" />
-                  智能分析
+                  开始生成调色方案
                 </>
               )}
             </Button>
+
+            {/* Staged loading indicator */}
+            {isAnalyzing && analysisStage && (
+              <div className="mt-3 flex items-start gap-2 rounded-lg bg-glow-primary p-3">
+                <div className="mt-0.5 h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-primary" />
+                <div className="flex-1">
+                  <p className="text-[11px] leading-relaxed text-primary/90">
+                    {analysisStage.message}
+                  </p>
+                  <div className="mt-2 flex gap-1">
+                    {[0, 1, 2].map((i) => (
+                      <div
+                        key={i}
+                        className={`h-1 flex-1 rounded-full transition-all duration-500 ${
+                          i <= analysisStage.stage
+                            ? "bg-primary/60"
+                            : "bg-border"
+                        }`}
+                      />
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       </ScrollArea>
