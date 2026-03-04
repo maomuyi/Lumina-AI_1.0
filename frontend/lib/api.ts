@@ -26,16 +26,24 @@ export interface SSEFinalEvent {
     download_url: string;
 }
 
+export interface SSEProgressEvent {
+    type: 'progress';
+    stage: string;
+    message: string;
+    progress: number;
+}
+
 export interface SSEErrorEvent {
     type: 'error';
     message: string;
 }
 
-export type SSEEvent = SSETextEvent | SSEFinalEvent | SSEErrorEvent;
+export type SSEEvent = SSETextEvent | SSEFinalEvent | SSEProgressEvent | SSEErrorEvent;
 
 // ─── SSE 回调 ──────────────────────────────────────────────────────────
 export interface SSECallbacks {
     onText?: (text: string) => void;
+    onProgress?: (data: SSEProgressEvent) => void;
     onFinal?: (data: SSEFinalEvent) => void;
     onError?: (message: string) => void;
 }
@@ -70,6 +78,8 @@ async function consumeSSEStream(
                         const event = JSON.parse(line.slice(6)) as SSEEvent;
                         if (event.type === 'text') {
                             callbacks.onText?.(event.content);
+                        } else if (event.type === 'progress') {
+                            callbacks.onProgress?.(event as SSEProgressEvent);
                         } else if (event.type === 'final') {
                             callbacks.onFinal?.(event as SSEFinalEvent);
                         } else if (event.type === 'error') {
@@ -113,6 +123,9 @@ export async function analyzeWithSSE(
 
     if (!response.ok) {
         const err = await response.text();
+        if (response.status === 413) {
+            throw new Error('Analyze API failed: 413 上传体积过大，请尝试更小尺寸图片或重新压缩后重试');
+        }
         throw new Error(`Analyze API failed: ${response.status} ${err}`);
     }
 

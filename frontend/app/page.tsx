@@ -8,6 +8,8 @@ import { RightPanel } from "@/components/right-panel"
 import { getDefaultParams } from "@/lib/lightroom-params"
 import {
   buildJpgDataPayload,
+  buildJpgPreviewBlob,
+  compressPreviewBlob,
   type DiagnosticReport,
   type RawDataPayload,
 } from "@/lib/image-analysis"
@@ -17,6 +19,7 @@ import {
   generateXmp,
   getDownloadUrl,
   type SSEFinalEvent,
+  type SSEProgressEvent,
 } from "@/lib/api"
 import { useRawParser } from "@/hooks/useRawParser"
 import { Toaster, toast } from "sonner"
@@ -37,6 +40,7 @@ export default function HomePage() {
     stage: number
     message: string
   } | null>(null)
+  const [analysisEvents, setAnalysisEvents] = useState<string[]>([])
   const [diagnostics, setDiagnostics] = useState<ImageDiagnostics | null>(null)
 
   const [report, setReport] = useState<DiagnosticReport | null>(null)
@@ -114,6 +118,7 @@ export default function HomePage() {
       setSessionId(null)
       setAnalysisRawPayload(null)
       setAnalysisStage(null)
+      setAnalysisEvents([])
       rawParser.reset()
 
       setFileName(file.name)
@@ -311,15 +316,32 @@ export default function HomePage() {
     setAnalysisProgress(0)
     setDownloadUrl(null)
     setAnalysisRawPayload(null)
+    setAnalysisEvents([])
     streamedTextRef.current = ""
 
     try {
+      const pushAnalysisEvent = (message: string) => {
+        setAnalysisEvents((prev) => {
+          if (prev.length > 0 && prev[prev.length - 1] === message) return prev
+          return [...prev.slice(-5), message]
+        })
+      }
+      const applyProgressEvent = (event: SSEProgressEvent) => {
+        const pct = Math.max(0, Math.min(100, Math.round(event.progress)))
+        const stageIdx = pct < 35 ? 0 : pct < 75 ? 1 : 2
+        setAnalysisProgress((prev) => (pct > prev ? pct : prev))
+        setAnalysisStage({ stage: stageIdx, message: event.message })
+        pushAnalysisEvent(event.message)
+      }
+
       setAnalysisStage({ stage: 0, message: "正在准备图像底层数据..." })
-      setAnalysisProgress(10)
+      setAnalysisProgress(8)
+      pushAnalysisEvent("已开始分析任务，正在准备底层数据...")
       const rawPayload = await buildRawDataPayload()
 
-      setAnalysisStage({ stage: 1, message: "正在传输预览图与数据轨..." })
-      setAnalysisProgress(25)
+      setAnalysisStage({ stage: 1, message: "数据轨准备完成，正在压缩与上传预览图..." })
+      setAnalysisProgress(18)
+      pushAnalysisEvent("数据轨准备完成，正在压缩并上传预览图...")
 
       let previewBlob: Blob
       if (fileType === "nef") {
@@ -328,20 +350,25 @@ export default function HomePage() {
           throw new Error("NEF 预览图缺失，请先完成 RAW 解析")
         }
         const resp = await fetch(previewUrl)
-        previewBlob = await resp.blob()
+        const originalPreviewBlob = await resp.blob()
+        previewBlob = await compressPreviewBlob(originalPreviewBlob)
       } else if (currentFile) {
-        previewBlob = currentFile
+        previewBlob = await buildJpgPreviewBlob(currentFile)
       } else {
         throw new Error("没有可用的预览图")
       }
 
-      setAnalysisStage({ stage: 2, message: "AI 正在生成 Lightroom 参数..." })
-      setAnalysisProgress(40)
+      setAnalysisStage({ stage: 2, message: "AI 正在深度推理，请稍候..." })
+      setAnalysisProgress(30)
+      pushAnalysisEvent("已提交到模型，正在进行视觉+数据双轨推理...")
 
       await analyzeWithSSE(previewBlob, rawPayload, userIntent, selectedStyle, {
         onText(text) {
           streamedTextRef.current += text
-          setAnalysisProgress((prev) => Math.min(90, prev + 0.5))
+          setAnalysisProgress((prev) => Math.min(92, prev + 0.3))
+        },
+        onProgress(event) {
+          applyProgressEvent(event)
         },
         onFinal(data) {
           setAnalysisProgress(100)
@@ -373,6 +400,7 @@ export default function HomePage() {
             setAnalysisProgress(0)
             setIsAnalyzing(false)
             setAnalysisStage(null)
+            setAnalysisEvents([])
           }, 500)
 
           toast.success("分析完成", {
@@ -387,6 +415,7 @@ export default function HomePage() {
       setIsAnalyzing(false)
       setAnalysisProgress(0)
       setAnalysisStage(null)
+      setAnalysisEvents([])
       toast.error("分析失败", {
         description: err instanceof Error ? err.message : "请稍后重试",
       })
@@ -400,6 +429,7 @@ export default function HomePage() {
     selectedStyle,
     convertToDiagnosticReport,
     currentFile,
+    setAnalysisEvents,
   ])
 
   const handleParamChange = useCallback((key: string, value: number) => {
@@ -449,6 +479,7 @@ export default function HomePage() {
         setIsAnalyzing(true)
         setAnalysisProgress(0)
         setAnalysisStage({ stage: 2, message: `AI 正在根据"${text}"重新调整参数...` })
+        setAnalysisEvents([`已收到微调指令：“${text}”`])
         streamedTextRef.current = ""
 
         try {
@@ -456,6 +487,16 @@ export default function HomePage() {
           await refineWithSSE(sessionId, text, {
             onText() {
               setAnalysisProgress((prev) => Math.min(90, prev + 1))
+            },
+            onProgress(event) {
+              const pct = Math.max(0, Math.min(100, Math.round(event.progress)))
+              const stageIdx = pct < 35 ? 0 : pct < 75 ? 1 : 2
+              setAnalysisProgress((prev) => (pct > prev ? pct : prev))
+              setAnalysisStage({ stage: stageIdx, message: event.message })
+              setAnalysisEvents((prev) => {
+                if (prev.length > 0 && prev[prev.length - 1] === event.message) return prev
+                return [...prev.slice(-5), event.message]
+              })
             },
             onFinal(data) {
               setAnalysisProgress(100)
@@ -488,6 +529,7 @@ export default function HomePage() {
                 setAnalysisProgress(0)
                 setIsAnalyzing(false)
                 setAnalysisStage(null)
+                setAnalysisEvents([])
               }, 500)
 
               toast.success("调整完成", {
@@ -502,6 +544,7 @@ export default function HomePage() {
           setIsAnalyzing(false)
           setAnalysisProgress(0)
           setAnalysisStage(null)
+          setAnalysisEvents([])
           toast.error("微调失败", {
             description: err instanceof Error ? err.message : "请稍后重试",
           })
@@ -573,6 +616,8 @@ export default function HomePage() {
           analyzeDisabledReason={analyzeDisabledReason}
           isAnalyzing={isAnalyzing}
           analysisStage={analysisStage}
+          analysisProgress={analysisProgress}
+          analysisEvents={analysisEvents}
           uploadedFileName={fileName}
           uploadedFileType={fileType}
         />

@@ -65,7 +65,7 @@ export function AiDiagnosticReport({ report }: AiDiagnosticReportProps) {
           <p className="text-[13px] font-medium leading-relaxed text-foreground/90">
             {report.module1.headline}
           </p>
-          <p className="mt-1.5 text-[11px] leading-relaxed text-muted-foreground">
+          <p className="mt-1.5 whitespace-pre-line text-[12px] leading-relaxed text-muted-foreground">
             {report.module1.summary}
           </p>
         </div>
@@ -92,7 +92,7 @@ export function AiDiagnosticReport({ report }: AiDiagnosticReportProps) {
             {report.module2.headline}
           </h3>
         </div>
-        <p className="text-[11px] leading-relaxed text-muted-foreground">
+        <p className="whitespace-pre-line text-[12px] leading-relaxed text-muted-foreground">
           {report.module2.description}
         </p>
 
@@ -147,7 +147,7 @@ export function AiDiagnosticReport({ report }: AiDiagnosticReportProps) {
             {report.module3.headline}
           </h3>
         </div>
-        <p className="text-[11px] leading-relaxed text-muted-foreground">
+        <p className="whitespace-pre-line text-[12px] leading-relaxed text-muted-foreground">
           {report.module3.description}
         </p>
 
@@ -165,7 +165,7 @@ export function AiDiagnosticReport({ report }: AiDiagnosticReportProps) {
                   {action.value}
                 </span>
               </div>
-              <span className="flex-1 text-right text-[10px] text-muted-foreground/70">
+              <span className="flex-1 text-[10px] leading-relaxed text-muted-foreground/75">
                 {action.reason}
               </span>
             </div>

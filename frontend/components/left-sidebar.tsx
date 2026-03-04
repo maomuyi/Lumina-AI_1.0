@@ -28,6 +28,8 @@ interface LeftSidebarProps {
   analyzeDisabledReason?: string | null
   isAnalyzing: boolean
   analysisStage: { stage: number; message: string } | null
+  analysisProgress: number
+  analysisEvents: string[]
   uploadedFileName: string | null
   uploadedFileType: string | null
 }
@@ -45,6 +47,8 @@ export function LeftSidebar({
   analyzeDisabledReason,
   isAnalyzing,
   analysisStage,
+  analysisProgress,
+  analysisEvents,
   uploadedFileName,
   uploadedFileType,
 }: LeftSidebarProps) {
@@ -236,9 +240,21 @@ export function LeftSidebar({
               <div className="mt-3 flex items-start gap-2 rounded-lg bg-glow-primary p-3">
                 <div className="mt-0.5 h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-primary" />
                 <div className="flex-1">
+                  <p className="text-[10px] font-medium text-primary/70">
+                    进度 {Math.max(0, Math.min(100, Math.round(analysisProgress)))}%
+                  </p>
                   <p className="text-[11px] leading-relaxed text-primary/90">
                     {analysisStage.message}
                   </p>
+                  {analysisEvents.length > 0 && (
+                    <div className="mt-2 space-y-1">
+                      {analysisEvents.slice(-3).map((event, idx) => (
+                        <p key={`${event}-${idx}`} className="text-[10px] text-primary/65">
+                          • {event}
+                        </p>
+                      ))}
+                    </div>
+                  )}
                   <div className="mt-2 flex gap-1">
                     {[0, 1, 2].map((i) => (
                       <div

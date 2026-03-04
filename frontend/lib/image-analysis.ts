@@ -63,6 +63,8 @@ export interface RawDataPayload {
 }
 
 const JPEG_ANALYSIS_MAX_EDGE = 1600
+const JPEG_UPLOAD_MAX_EDGE = 1920
+const JPEG_UPLOAD_QUALITY = 0.86
 
 interface JpegMeta {
   cameraModel?: string
@@ -373,4 +375,63 @@ export async function buildJpgDataPayload(file: File): Promise<RawDataPayload> {
     color_space: meta.colorSpace,
     icc_profile: meta.iccProfile,
   }
+}
+
+export async function buildJpgPreviewBlob(file: File): Promise<Blob> {
+  const bitmap = await createImageBitmap(file)
+  const maxSide = Math.max(bitmap.width, bitmap.height)
+  const scale = maxSide > JPEG_UPLOAD_MAX_EDGE ? JPEG_UPLOAD_MAX_EDGE / maxSide : 1
+  const width = Math.max(1, Math.round(bitmap.width * scale))
+  const height = Math.max(1, Math.round(bitmap.height * scale))
+
+  const canvas = document.createElement("canvas")
+  canvas.width = width
+  canvas.height = height
+
+  const ctx = canvas.getContext("2d")
+  if (!ctx) {
+    bitmap.close()
+    throw new Error("无法创建预览压缩上下文")
+  }
+
+  ctx.drawImage(bitmap, 0, 0, width, height)
+  bitmap.close()
+
+  const blob = await new Promise<Blob | null>((resolve) => {
+    canvas.toBlob(resolve, "image/jpeg", JPEG_UPLOAD_QUALITY)
+  })
+
+  if (!blob) {
+    throw new Error("JPG 预览压缩失败")
+  }
+  return blob
+}
+
+export async function compressPreviewBlob(blob: Blob): Promise<Blob> {
+  const bitmap = await createImageBitmap(blob)
+  const maxSide = Math.max(bitmap.width, bitmap.height)
+  const scale = maxSide > JPEG_UPLOAD_MAX_EDGE ? JPEG_UPLOAD_MAX_EDGE / maxSide : 1
+  const width = Math.max(1, Math.round(bitmap.width * scale))
+  const height = Math.max(1, Math.round(bitmap.height * scale))
+
+  const canvas = document.createElement("canvas")
+  canvas.width = width
+  canvas.height = height
+
+  const ctx = canvas.getContext("2d")
+  if (!ctx) {
+    bitmap.close()
+    throw new Error("无法创建预览压缩上下文")
+  }
+
+  ctx.drawImage(bitmap, 0, 0, width, height)
+  bitmap.close()
+
+  const compressed = await new Promise<Blob | null>((resolve) => {
+    canvas.toBlob(resolve, "image/jpeg", JPEG_UPLOAD_QUALITY)
+  })
+  if (!compressed) {
+    throw new Error("预览图压缩失败")
+  }
+  return compressed
 }

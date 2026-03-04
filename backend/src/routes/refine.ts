@@ -14,6 +14,7 @@ import { safeParseAIResponse } from '../utils/parseAI.js';
 import { clampLightroomParams } from '../utils/clampParams.js';
 import { generateXMP } from '../services/xmp.js';
 import { writeXmpFile } from '../services/xmpFiles.js';
+import { enrichDiagnosticReport } from '../services/reportEnhancer.js';
 
 interface RefineBody {
     session_id: string;
@@ -39,15 +40,31 @@ export async function refineRoutes(fastify: FastifyInstance) {
         }
 
         // ── SSE 响应头 ──────────────────────────────────────────────────────
+        const requestOrigin = request.headers.origin;
         reply.raw.writeHead(200, {
             'Content-Type': 'text/event-stream',
             'Cache-Control': 'no-cache',
             'Connection': 'keep-alive',
             'X-Accel-Buffering': 'no',
+            ...(requestOrigin
+                ? {
+                    'Access-Control-Allow-Origin': requestOrigin,
+                    'Access-Control-Allow-Credentials': 'true',
+                    'Vary': 'Origin',
+                }
+                : {}),
         });
 
         const sendSSE = (data: Record<string, unknown>) => {
             reply.raw.write(`data: ${JSON.stringify(data)}\n\n`);
+        };
+        const sendProgress = (progress: number, stage: string, message: string) => {
+            sendSSE({
+                type: 'progress',
+                progress: Math.max(0, Math.min(100, progress)),
+                stage,
+                message,
+            });
         };
 
         // ── 构建 Prompt（不传图，只传上轮参数 + 摘要） ───────────────────────
@@ -56,18 +73,34 @@ export async function refineRoutes(fastify: FastifyInstance) {
             body.new_intent,
             session.rawDataSummary
         );
+        sendProgress(20, 'prompt_ready', '正在根据你的新意图重组参数策略...');
 
         // ── 流式调用 Text-only LLM ──────────────────────────────────────────
         await new Promise<void>((resolve) => {
+            let firstTokenReceived = false;
+            sendProgress(35, 'llm_started', '已提交微调任务，AI 正在重新计算参数...');
             streamTextRefine(userPrompt, {
                 onTextChunk(text) {
+                    if (!firstTokenReceived) {
+                        firstTokenReceived = true;
+                        sendProgress(65, 'llm_first_token', '模型开始返回微调建议，正在整理中...');
+                    }
                     sendSSE({ type: 'text', content: text });
                 },
 
                 async onComplete(fullText) {
                     try {
+                        if (!firstTokenReceived) {
+                            sendProgress(65, 'llm_buffer_ready', '模型已返回完整微调结果，正在整理中...');
+                        }
+                        sendProgress(85, 'parsing', '正在校验参数并生成新的 XMP...');
                         const parsed = safeParseAIResponse(fullText);
                         const clamped = clampLightroomParams(parsed.lightroom_params);
+                        const enrichedReport = enrichDiagnosticReport(
+                            parsed.diagnostic_report,
+                            session.rawData,
+                            clamped
+                        );
 
                         // 生成新 XMP
                         const xmpContent = generateXMP(clamped);
@@ -79,10 +112,11 @@ export async function refineRoutes(fastify: FastifyInstance) {
                             round: session.round + 1,
                         });
 
+                        sendProgress(95, 'xmp_ready', '新 XMP 已生成，准备返回结果...');
                         sendSSE({
                             type: 'final',
                             session_id: body.session_id,
-                            diagnostic_report: parsed.diagnostic_report,
+                            diagnostic_report: enrichedReport,
                             lightroom_params: clamped,
                             download_url: downloadUrl,
                         });
@@ -102,6 +136,13 @@ export async function refineRoutes(fastify: FastifyInstance) {
                     reply.raw.end();
                     resolve();
                 },
+            }).catch((err) => {
+                sendSSE({
+                    type: 'error',
+                    message: err instanceof Error ? err.message : 'Text stream failed before completion',
+                });
+                reply.raw.end();
+                resolve();
             });
         });
     });

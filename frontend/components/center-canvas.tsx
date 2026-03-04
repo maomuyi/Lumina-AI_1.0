@@ -149,7 +149,7 @@ export function CenterCanvas({
 
   // Wheel zoom (pinch-to-zoom on trackpad maps to wheel events)
   const handleWheel = useCallback(
-    (e: React.WheelEvent) => {
+    (e: WheelEvent) => {
       if (!containerRef.current || !naturalSize.w) return
       e.preventDefault()
 
@@ -172,6 +172,13 @@ export function CenterCanvas({
     },
     [naturalSize]
   )
+
+  useEffect(() => {
+    const el = containerRef.current
+    if (!el) return
+    el.addEventListener("wheel", handleWheel, { passive: false })
+    return () => el.removeEventListener("wheel", handleWheel)
+  }, [handleWheel])
 
   // Mouse drag to pan
   const handleMouseDown = useCallback(
@@ -302,7 +309,6 @@ export function CenterCanvas({
         ref={containerRef}
         className="relative flex flex-1 items-center justify-center overflow-hidden"
         style={{ cursor: cursorStyle }}
-        onWheel={handleWheel}
         onMouseDown={handleMouseDown}
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
@@ -344,11 +350,10 @@ export function CenterCanvas({
                 variant="ghost"
                 size="sm"
                 onClick={handleFit}
-                className={`h-6 rounded-full px-2 text-[11px] font-medium transition-all ${
-                  isFitMode
+                className={`h-6 rounded-full px-2 text-[11px] font-medium transition-all ${isFitMode
                     ? "bg-primary/15 text-primary"
                     : "text-muted-foreground hover:text-foreground"
-                }`}
+                  }`}
               >
                 <Maximize2 className="mr-1 h-3 w-3" />
                 Fit
@@ -357,11 +362,10 @@ export function CenterCanvas({
               {/* Zoom percentage indicator */}
               <button
                 onClick={handleZoom100}
-                className={`flex h-6 min-w-[48px] items-center justify-center rounded-full px-2 text-[11px] font-mono font-medium transition-all ${
-                  Math.abs(scale - 1) < 0.01 && !isFitMode
+                className={`flex h-6 min-w-[48px] items-center justify-center rounded-full px-2 text-[11px] font-mono font-medium transition-all ${Math.abs(scale - 1) < 0.01 && !isFitMode
                     ? "bg-primary/15 text-primary"
                     : "text-muted-foreground hover:bg-secondary hover:text-foreground"
-                }`}
+                  }`}
               >
                 {displayPercent}%
               </button>

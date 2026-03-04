@@ -9,25 +9,25 @@
  */
 
 export interface RawDataForPrompt {
-    file_type: string;
-    exif: {
-        camera_model?: string;
-        iso?: number;
-        shutter?: string;
-        aperture?: number;
-        focal_length?: number;
-    };
-    sensor_physics: {
-        bit_depth: number;
-        shadow_survival_rate: number;
-        highlight_clipping_rate: number;
-        raw_channel_multipliers?: number[];
-        banding_risk: string;
-        black_level?: number;
-        sensor_white_level?: number;
-    };
-    linear_histogram: number[];
-    color_space?: string;
+  file_type: string;
+  exif: {
+    camera_model?: string;
+    iso?: number;
+    shutter?: string;
+    aperture?: number;
+    focal_length?: number;
+  };
+  sensor_physics: {
+    bit_depth: number;
+    shadow_survival_rate: number;
+    highlight_clipping_rate: number;
+    raw_channel_multipliers?: number[];
+    banding_risk: string;
+    black_level?: number;
+    sensor_white_level?: number;
+  };
+  linear_histogram: number[];
+  color_space?: string;
 }
 
 const SYSTEM_PROMPT = `[Role Definition / 角色定义]
@@ -83,14 +83,24 @@ const SYSTEM_PROMPT = `[Role Definition / 角色定义]
 你脑海中拥有 Lightroom 100+ 个参数的全量字典。但在输出 JSON 时，你只需输出"偏离了 0"或"你主动修改过"的参数键值对。
 Key 必须完全等同于 Adobe XMP 官方标准命名。
 
+对于 diagnostic_report，你的语气应该是“极其严苛且专业的资深数字电影级或商业广告调色师”。你不能只说“偏暗/偏亮/不错”，必须使用量化的专业词汇（如：光比、微反差、动态范围衰减、色彩切割效应、信噪比临界值、底片宽容度、反光率等）。一针见血，充满干货和数据感。字词必须高度浓缩。
+
+[Report Quality Hard Constraints / 报告质量硬约束]
+- 你的四段诊断必须体现“视觉轨 + 物理轨”融合结论，绝不允许只聊其中一条轨道。
+- module_1_diagnosis：至少 3 句，必须包含“场景语义判断 + 主要矛盾 + 可执行方向”。
+- module_2_physics：必须引用至少 5 个输入量化指标（如 bit_depth、ISO、highlight_clipping_rate、shadow_survival_rate、banding_risk、linear_histogram 主峰区间）。
+- module_3_strategy：必须按“基线校准→光影重映射→颜色分级→画质防御”四段策略写清 trade-off（收益与副作用控制）。
+- module_4_core_actions：至少 6 条；每条都必须使用格式 "【参数名】值：物理依据 + 预期收益 + 风险防范"，禁止空泛描述。
+- 禁止模板化废话（例如“整体不错”“建议微调”），每句都要能落到输入数据或参数动作上。
+
 你必须且只能返回以下 JSON 结构，禁止输出任何 Markdown 标记或多余文字：
 
 {
   "diagnostic_report": {
-    "module_1_diagnosis": "【🖼 画面诊断】...",
-    "module_2_physics": "【🔬 底层剖析】...",
-    "module_3_strategy": "【💡 美化建议】...",
-    "module_4_core_actions": ["【参数名】值：原因", ...]
+    "module_1_diagnosis": "【🖼 画面诊断】(描述画面的光影结构、美学缺陷与核心矛盾，如：主体面部光比超过1:4，暗部存在明显的动态范围衰减...)",
+    "module_2_physics": "【🔬 底层剖析】(结合传入的物理数据 JSON，量化分析底片质量，如：Sensor死白溢出5.2%，处于危险边缘，8-bit色域面临断层风险...)",
+    "module_3_strategy": "【💡 美化建议】(给出针对性的专家级调色策略，如：利用高光压暗反推对比度，牺牲局部死黑以换取整体通透感...)",
+    "module_4_core_actions": ["【参数名】值：原因 (如：为抵御噪点放大，强行介入...)", ...]
   },
   "lightroom_params": {
     "ProcessVersion": "15.4",
@@ -108,39 +118,41 @@ Key 必须完全等同于 Adobe XMP 官方标准命名。
  * 构建首轮完整分析的用户 Prompt
  */
 export function buildFirstRoundPrompt(
-    rawData: RawDataForPrompt,
-    userIntent: string,
-    style: string
+  rawData: RawDataForPrompt,
+  userIntent: string,
+  style: string
 ): string {
-    const styleLine =
-        style && style !== 'auto'
-            ? `\n[用户选择的风格预设]: ${style}`
-            : '\n[风格偏好]: AI 智能匹配（自动判断最佳风格）';
+  const styleLine =
+    style && style !== 'auto'
+      ? `\n[用户选择的风格预设]: ${style}`
+      : '\n[风格偏好]: AI 智能匹配（自动判断最佳风格）';
 
-    return `以下是用户上传照片的底层物理数据（由前端 WASM 解析得出）：
+  return `以下是用户上传照片的底层物理数据（由前端 WASM 解析得出）：
 
 \`\`\`json
-${JSON.stringify(rawData, null, 2)}
+${JSON.stringify(rawData)}
 \`\`\`
 ${styleLine}
 ${userIntent ? `\n[用户自然语言意图]: ${userIntent}` : ''}
 
-请结合上方的物理数据和随附的视觉预览图，严格按照 System Prompt 中的 5 步工作流执行推导，输出 JSON。`;
+请结合上方的物理数据和随附的视觉预览图，严格按照 System Prompt 中的 5 步工作流执行推导，输出 JSON。
+
+提醒：这次任务是双轨融合分析（视觉语义 + RAW/JPG 物理数据）。diagnostic_report 必须体现两条轨道如何共同约束参数。`;
 }
 
 /**
  * 构建多轮微调的用户 Prompt（不传图，不传完整物理数据）
  */
 export function buildRefinePrompt(
-    prevParams: Record<string, number | number[]>,
-    newIntent: string,
-    rawDataSummary: string
+  prevParams: Record<string, number | number[]>,
+  newIntent: string,
+  rawDataSummary: string
 ): string {
-    return `用户对上一轮的调色方案进行了微调。
+  return `用户对上一轮的调色方案进行了微调。
 
 [上一轮输出的 lightroom_params]:
 \`\`\`json
-${JSON.stringify(prevParams, null, 2)}
+${JSON.stringify(prevParams)}
 \`\`\`
 
 [底片物理数据概要]: ${rawDataSummary}

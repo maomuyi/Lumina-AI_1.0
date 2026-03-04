@@ -17,6 +17,10 @@ const openai = new OpenAI({
     apiKey: process.env.OPENAI_API_KEY || '',
     baseURL: process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1',
 });
+const LLM_MAX_OUTPUT_TOKENS = parseInt(process.env.LLM_MAX_OUTPUT_TOKENS || '2048', 10);
+const LLM_PRIMARY_TIMEOUT_MS = parseInt(process.env.LLM_PRIMARY_TIMEOUT_MS || '120000', 10);
+const LLM_FALLBACK_TIMEOUT_MS = parseInt(process.env.LLM_FALLBACK_TIMEOUT_MS || '90000', 10);
+const LLM_PRIMARY_RETRY_COUNT = Math.max(0, parseInt(process.env.LLM_PRIMARY_RETRY_COUNT || '1', 10));
 
 export interface StreamCallbacks {
     /** 每收到一个文本 chunk 时触发（用于 SSE 推送给前端） */
@@ -54,12 +58,13 @@ async function streamVisionViaChatCompletions(
     model: string,
     userPrompt: string,
     previewImageBase64: string,
-    callbacks: StreamCallbacks
+    callbacks: StreamCallbacks,
+    signal: AbortSignal
 ): Promise<string> {
     const stream = await openai.chat.completions.create({
         model,
         stream: true,
-        max_tokens: 4096,
+        max_tokens: LLM_MAX_OUTPUT_TOKENS,
         temperature: 0.3,
         messages: [
             { role: 'system', content: SYSTEM_PROMPT },
@@ -77,7 +82,7 @@ async function streamVisionViaChatCompletions(
                 ],
             },
         ],
-    });
+    }, { signal });
 
     let fullText = '';
     for await (const chunk of stream) {
@@ -88,18 +93,22 @@ async function streamVisionViaChatCompletions(
         }
     }
 
+    if (!fullText.trim()) {
+        throw new Error('Vision stream path returned empty content');
+    }
     return fullText;
 }
 
 async function completeVisionViaResponses(
     model: string,
     userPrompt: string,
-    previewImageBase64: string
+    previewImageBase64: string,
+    signal: AbortSignal
 ): Promise<string> {
     const response = await openai.responses.create({
         model,
         temperature: 0.3,
-        max_output_tokens: 4096,
+        max_output_tokens: LLM_MAX_OUTPUT_TOKENS,
         input: [
             {
                 role: 'system',
@@ -119,26 +128,31 @@ async function completeVisionViaResponses(
                 ],
             },
         ],
-    } as never);
+    } as never, { signal });
 
-    return extractResponsesText(response);
+    const text = extractResponsesText(response);
+    if (!text.trim()) {
+        throw new Error('Vision fallback path returned empty content');
+    }
+    return text;
 }
 
 async function streamTextViaChatCompletions(
     model: string,
     userPrompt: string,
-    callbacks: StreamCallbacks
+    callbacks: StreamCallbacks,
+    signal: AbortSignal
 ): Promise<string> {
     const stream = await openai.chat.completions.create({
         model,
         stream: true,
-        max_tokens: 4096,
+        max_tokens: LLM_MAX_OUTPUT_TOKENS,
         temperature: 0.3,
         messages: [
             { role: 'system', content: SYSTEM_PROMPT },
             { role: 'user', content: userPrompt },
         ],
-    });
+    }, { signal });
 
     let fullText = '';
     for await (const chunk of stream) {
@@ -149,17 +163,21 @@ async function streamTextViaChatCompletions(
         }
     }
 
+    if (!fullText.trim()) {
+        throw new Error('Text stream path returned empty content');
+    }
     return fullText;
 }
 
 async function completeTextViaResponses(
     model: string,
-    userPrompt: string
+    userPrompt: string,
+    signal: AbortSignal
 ): Promise<string> {
     const response = await openai.responses.create({
         model,
         temperature: 0.3,
-        max_output_tokens: 4096,
+        max_output_tokens: LLM_MAX_OUTPUT_TOKENS,
         input: [
             {
                 role: 'system',
@@ -170,40 +188,75 @@ async function completeTextViaResponses(
                 content: [{ type: 'input_text', text: userPrompt }],
             },
         ],
-    } as never);
+    } as never, { signal });
 
-    return extractResponsesText(response);
+    const text = extractResponsesText(response);
+    if (!text.trim()) {
+        throw new Error('Text fallback path returned empty content');
+    }
+    return text;
+}
+
+async function withTimeout<T>(
+    timeoutMs: number,
+    label: string,
+    fn: (signal: AbortSignal) => Promise<T>
+): Promise<T> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+        return await fn(controller.signal);
+    } catch (err) {
+        if (controller.signal.aborted) {
+            throw new Error(`${label} timed out after ${timeoutMs}ms`);
+        }
+        throw err;
+    } finally {
+        clearTimeout(timer);
+    }
 }
 
 async function runWithFallback(
-    primary: () => Promise<string>,
-    fallback: () => Promise<string>,
+    primary: (signal: AbortSignal) => Promise<string>,
+    fallback: (signal: AbortSignal) => Promise<string>,
     callbacks: StreamCallbacks,
     purpose: string
 ): Promise<void> {
-    try {
-        const fullText = await primary();
-        callbacks.onComplete(fullText);
-        return;
-    } catch (primaryErr) {
-        const primaryMessage = toErrorMessage(primaryErr);
-        console.warn(`[LLM] ${purpose} primary path failed: ${primaryMessage}`);
-
+    let primaryMessage = '';
+    for (let attempt = 0; attempt <= LLM_PRIMARY_RETRY_COUNT; attempt += 1) {
         try {
-            const fullText = await fallback();
-            if (fullText) {
-                callbacks.onTextChunk(fullText);
-            }
+            const fullText = await withTimeout(
+                LLM_PRIMARY_TIMEOUT_MS,
+                `${purpose} primary attempt ${attempt + 1}`,
+                primary
+            );
             callbacks.onComplete(fullText);
             return;
-        } catch (fallbackErr) {
-            const fallbackMessage = toErrorMessage(fallbackErr);
-            callbacks.onError(
-                new Error(
-                    `${purpose} failed on both paths. primary="${primaryMessage}", fallback="${fallbackMessage}"`
-                )
+        } catch (primaryErr) {
+            primaryMessage = toErrorMessage(primaryErr);
+            console.warn(
+                `[LLM] ${purpose} primary attempt ${attempt + 1} failed: ${primaryMessage}`
             );
+            if (attempt < LLM_PRIMARY_RETRY_COUNT) {
+                console.warn(`[LLM] ${purpose} retrying primary path...`);
+            }
         }
+    }
+
+    try {
+        const fullText = await withTimeout(LLM_FALLBACK_TIMEOUT_MS, `${purpose} fallback`, fallback);
+        if (fullText) {
+            callbacks.onTextChunk(fullText);
+        }
+        callbacks.onComplete(fullText);
+        return;
+    } catch (fallbackErr) {
+        const fallbackMessage = toErrorMessage(fallbackErr);
+        callbacks.onError(
+            new Error(
+                `${purpose} failed on both paths. primary="${primaryMessage}", fallback="${fallbackMessage}"`
+            )
+        );
     }
 }
 
@@ -216,9 +269,25 @@ export async function streamVisionAnalysis(
     callbacks: StreamCallbacks
 ): Promise<void> {
     const model = process.env.LLM_VISION_MODEL || 'gpt-5-2025-08-07';
+    const preferResponsesPrimary = /^gpt-5/i.test(model);
+
+    if (preferResponsesPrimary) {
+        await runWithFallback(
+            async (signal) => {
+                const fullText = await completeVisionViaResponses(model, userPrompt, previewImageBase64, signal);
+                callbacks.onTextChunk(fullText);
+                return fullText;
+            },
+            (signal) => streamVisionViaChatCompletions(model, userPrompt, previewImageBase64, callbacks, signal),
+            callbacks,
+            'Vision analysis'
+        );
+        return;
+    }
+
     await runWithFallback(
-        () => streamVisionViaChatCompletions(model, userPrompt, previewImageBase64, callbacks),
-        () => completeVisionViaResponses(model, userPrompt, previewImageBase64),
+        (signal) => streamVisionViaChatCompletions(model, userPrompt, previewImageBase64, callbacks, signal),
+        (signal) => completeVisionViaResponses(model, userPrompt, previewImageBase64, signal),
         callbacks,
         'Vision analysis'
     );
@@ -232,9 +301,25 @@ export async function streamTextRefine(
     callbacks: StreamCallbacks
 ): Promise<void> {
     const model = process.env.LLM_TEXT_MODEL || 'gpt-5-2025-08-07';
+    const preferResponsesPrimary = /^gpt-5/i.test(model);
+
+    if (preferResponsesPrimary) {
+        await runWithFallback(
+            async (signal) => {
+                const fullText = await completeTextViaResponses(model, userPrompt, signal);
+                callbacks.onTextChunk(fullText);
+                return fullText;
+            },
+            (signal) => streamTextViaChatCompletions(model, userPrompt, callbacks, signal),
+            callbacks,
+            'Text refine'
+        );
+        return;
+    }
+
     await runWithFallback(
-        () => streamTextViaChatCompletions(model, userPrompt, callbacks),
-        () => completeTextViaResponses(model, userPrompt),
+        (signal) => streamTextViaChatCompletions(model, userPrompt, callbacks, signal),
+        (signal) => completeTextViaResponses(model, userPrompt, signal),
         callbacks,
         'Text refine'
     );

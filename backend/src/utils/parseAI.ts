@@ -24,6 +24,78 @@ const DEFAULT_SAFE_PRESET: LLMResponse = {
     lightroom_params: {},
 };
 
+function asObject(value: unknown): Record<string, unknown> | null {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+    return value as Record<string, unknown>;
+}
+
+function normalizeActions(value: unknown): string[] {
+    if (Array.isArray(value)) {
+        const cleaned = value
+            .map((item) => String(item ?? '').trim())
+            .filter(Boolean);
+        if (cleaned.length > 0) return cleaned;
+    }
+    if (typeof value === 'string' && value.trim()) {
+        return value
+            .split('\n')
+            .map((line) => line.trim())
+            .filter(Boolean);
+    }
+    return [...DEFAULT_SAFE_PRESET.diagnostic_report.module_4_core_actions];
+}
+
+function normalizeParams(value: unknown): Record<string, number | number[]> {
+    const obj = asObject(value);
+    if (!obj) return {};
+
+    const result: Record<string, number | number[]> = {};
+    for (const [key, rawVal] of Object.entries(obj)) {
+        if (Array.isArray(rawVal)) {
+            const nums = rawVal
+                .map((item) => Number(item))
+                .filter((num) => Number.isFinite(num));
+            if (nums.length > 0) {
+                result[key] = nums;
+            }
+            continue;
+        }
+
+        const num = Number(rawVal);
+        if (Number.isFinite(num)) {
+            result[key] = num;
+        }
+    }
+
+    return result;
+}
+
+function normalizeResponse(value: unknown): LLMResponse {
+    const root = asObject(value);
+    const report = asObject(root?.diagnostic_report);
+    const module1 = typeof report?.module_1_diagnosis === 'string'
+        ? report.module_1_diagnosis.trim()
+        : DEFAULT_SAFE_PRESET.diagnostic_report.module_1_diagnosis;
+    const module2 = typeof report?.module_2_physics === 'string'
+        ? report.module_2_physics.trim()
+        : DEFAULT_SAFE_PRESET.diagnostic_report.module_2_physics;
+    const module3 = typeof report?.module_3_strategy === 'string'
+        ? report.module_3_strategy.trim()
+        : DEFAULT_SAFE_PRESET.diagnostic_report.module_3_strategy;
+    const module4 = normalizeActions(report?.module_4_core_actions);
+    const params = normalizeParams(root?.lightroom_params);
+
+    return {
+        diagnostic_report: {
+            module_1_diagnosis: module1 || DEFAULT_SAFE_PRESET.diagnostic_report.module_1_diagnosis,
+            module_2_physics: module2 || DEFAULT_SAFE_PRESET.diagnostic_report.module_2_physics,
+            module_3_strategy: module3 || DEFAULT_SAFE_PRESET.diagnostic_report.module_3_strategy,
+            module_4_core_actions: module4,
+        },
+        lightroom_params: params,
+    };
+}
+
 /**
  * 三层防御解析 LLM 原始输出。
  * 第一层：直接 JSON.parse
@@ -34,7 +106,7 @@ const DEFAULT_SAFE_PRESET: LLMResponse = {
 export function safeParseAIResponse(rawText: string): LLMResponse {
     // 第一层
     try {
-        return JSON.parse(rawText) as LLMResponse;
+        return normalizeResponse(JSON.parse(rawText));
     } catch {
         // continue
     }
@@ -43,7 +115,7 @@ export function safeParseAIResponse(rawText: string): LLMResponse {
     const mdMatch = rawText.match(/```(?:json)?\s*([\s\S]*?)```/);
     if (mdMatch?.[1]) {
         try {
-            return JSON.parse(mdMatch[1]) as LLMResponse;
+            return normalizeResponse(JSON.parse(mdMatch[1]));
         } catch {
             // continue
         }
@@ -54,7 +126,7 @@ export function safeParseAIResponse(rawText: string): LLMResponse {
     const braceEnd = rawText.lastIndexOf('}');
     if (braceStart !== -1 && braceEnd > braceStart) {
         try {
-            return JSON.parse(rawText.slice(braceStart, braceEnd + 1)) as LLMResponse;
+            return normalizeResponse(JSON.parse(rawText.slice(braceStart, braceEnd + 1)));
         } catch {
             // continue
         }

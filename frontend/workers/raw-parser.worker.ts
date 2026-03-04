@@ -89,11 +89,13 @@ interface LibRawModuleType {
 
 declare function importScripts(...urls: string[]): void;
 declare function LibRawModule(): Promise<LibRawModuleType>;
+type LibRawModuleFactory = () => Promise<LibRawModuleType>;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Worker 内部状态
 // ─────────────────────────────────────────────────────────────────────────────
 let mod: LibRawModuleType | null = null;
+let moduleFactory: LibRawModuleFactory | null = null;
 
 /** 发送进度消息给主线程 */
 function progress(stage: string, pct: number) {
@@ -104,13 +106,51 @@ function progress(stage: string, pct: number) {
 async function ensureModule(): Promise<LibRawModuleType> {
     if (mod) return mod;
     progress('正在加载 WASM 模块...', 0);
-    // Workers 中用 importScripts 加载（Emscripten SINGLE_FILE=1 模式）
-    try {
-        importScripts('/wasm/raw_analyzer.js');
-    } catch {
-        throw new Error('未找到 /wasm/raw_analyzer.js，请先运行 frontend/wasm/build.sh 生成 WASM 产物。');
+
+    if (!moduleFactory) {
+        const wasmUrl = new URL('/wasm/raw_analyzer.js', self.location.origin).toString();
+        const workerScope = self as typeof self & {
+            LibRawModule?: LibRawModuleFactory;
+        };
+
+        const fromGlobal = workerScope.LibRawModule;
+        if (typeof fromGlobal === 'function') {
+            moduleFactory = fromGlobal;
+        }
+
+        // 优先走经典 Worker 路径（importScripts）。
+        if (!moduleFactory) {
+            try {
+                importScripts(wasmUrl);
+                if (typeof workerScope.LibRawModule === 'function') {
+                    moduleFactory = workerScope.LibRawModule;
+                } else if (typeof LibRawModule === 'function') {
+                    moduleFactory = LibRawModule;
+                }
+            } catch {
+                // module worker 下 importScripts 不可用，继续走 fallback。
+            }
+        }
+
+        // module Worker fallback：fetch + Function 执行脚本并提取工厂函数。
+        if (!moduleFactory) {
+            const resp = await fetch(wasmUrl, { cache: 'no-store' });
+            if (!resp.ok) {
+                throw new Error('未找到 /wasm/raw_analyzer.js，请先运行 frontend/wasm/build.sh 生成 WASM 产物。');
+            }
+            const source = await resp.text();
+            const factory = new Function(
+                `${source}\nreturn (typeof LibRawModule === "function" ? LibRawModule : (typeof self !== "undefined" ? self.LibRawModule : undefined));`
+            )() as unknown;
+            if (typeof factory !== 'function') {
+                throw new Error('WASM 加载失败：raw_analyzer.js 未暴露 LibRawModule');
+            }
+            moduleFactory = factory as LibRawModuleFactory;
+            workerScope.LibRawModule = moduleFactory;
+        }
     }
-    mod = await LibRawModule();
+
+    mod = await moduleFactory();
     return mod;
 }
 

@@ -60,7 +60,7 @@ export function TopToolbar({
             {isAnalyzing && (
               <span className="flex items-center gap-1 text-[11px] text-primary">
                 <Sparkles className="h-3 w-3 glow-pulse" />
-                <span>AI 分析中</span>
+                <span>AI 分析中 {Math.max(0, Math.min(100, Math.round(analysisProgress)))}%</span>
               </span>
             )}
             {isSaved && !isAnalyzing && (
