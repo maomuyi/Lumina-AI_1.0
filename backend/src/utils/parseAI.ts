@@ -24,6 +24,129 @@ const DEFAULT_SAFE_PRESET: LLMResponse = {
     lightroom_params: {},
 };
 
+function sanitizeRawText(input: string): string {
+    return input
+        .replace(/^\uFEFF/, '')
+        .replace(/\r/g, '')
+        .replace(/[“”]/g, '"')
+        .replace(/[‘’]/g, "'");
+}
+
+function parseCandidate(candidate: string): LLMResponse | null {
+    const sanitized = sanitizeRawText(candidate).trim();
+    if (!sanitized) return null;
+    try {
+        return normalizeResponse(JSON.parse(sanitized));
+    } catch {
+        return null;
+    }
+}
+
+function extractBalancedObject(rawText: string): string | null {
+    const s = sanitizeRawText(rawText);
+    const start = s.indexOf('{');
+    if (start === -1) return null;
+
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    for (let i = start; i < s.length; i += 1) {
+        const ch = s[i];
+
+        if (inString) {
+            if (escaped) {
+                escaped = false;
+                continue;
+            }
+            if (ch === '\\') {
+                escaped = true;
+                continue;
+            }
+            if (ch === '"') {
+                inString = false;
+            }
+            continue;
+        }
+
+        if (ch === '"') {
+            inString = true;
+            continue;
+        }
+        if (ch === '{') {
+            depth += 1;
+        } else if (ch === '}') {
+            depth -= 1;
+            if (depth === 0) {
+                return s.slice(start, i + 1);
+            }
+        }
+    }
+
+    return null;
+}
+
+function repairPossiblyTruncatedJson(rawText: string): string | null {
+    const s = sanitizeRawText(rawText);
+    const start = s.indexOf('{');
+    if (start === -1) return null;
+
+    const core = s.slice(start).trim();
+    if (!core) return null;
+
+    let inString = false;
+    let escaped = false;
+    const stack: string[] = [];
+
+    for (let i = 0; i < core.length; i += 1) {
+        const ch = core[i];
+
+        if (inString) {
+            if (escaped) {
+                escaped = false;
+                continue;
+            }
+            if (ch === '\\') {
+                escaped = true;
+                continue;
+            }
+            if (ch === '"') {
+                inString = false;
+            }
+            continue;
+        }
+
+        if (ch === '"') {
+            inString = true;
+            continue;
+        }
+        if (ch === '{') {
+            stack.push('}');
+        } else if (ch === '[') {
+            stack.push(']');
+        } else if (ch === '}' || ch === ']') {
+            if (stack.length === 0) continue;
+            const expected = stack[stack.length - 1];
+            if (expected === ch) {
+                stack.pop();
+            }
+        }
+    }
+
+    let repaired = core;
+    // 去掉结尾明显不完整的逗号
+    repaired = repaired.replace(/,\s*$/, '');
+    // 去掉对象/数组闭合前多余逗号
+    repaired = repaired.replace(/,\s*([}\]])/g, '$1');
+
+    if (inString) {
+        repaired += '"';
+    }
+    while (stack.length > 0) {
+        repaired += stack.pop();
+    }
+    return repaired;
+}
+
 function asObject(value: unknown): Record<string, unknown> | null {
     if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
     return value as Record<string, unknown>;
@@ -104,32 +227,28 @@ function normalizeResponse(value: unknown): LLMResponse {
  * 全失败：返回安全预设
  */
 export function safeParseAIResponse(rawText: string): LLMResponse {
-    // 第一层
-    try {
-        return normalizeResponse(JSON.parse(rawText));
-    } catch {
-        // continue
-    }
+    const direct = parseCandidate(rawText);
+    if (direct) return direct;
 
-    // 第二层：markdown code block
+    // code block 提取
     const mdMatch = rawText.match(/```(?:json)?\s*([\s\S]*?)```/);
     if (mdMatch?.[1]) {
-        try {
-            return normalizeResponse(JSON.parse(mdMatch[1]));
-        } catch {
-            // continue
-        }
+        const fromCodeBlock = parseCandidate(mdMatch[1]);
+        if (fromCodeBlock) return fromCodeBlock;
     }
 
-    // 第三层：提取最外层 JSON 对象
-    const braceStart = rawText.indexOf('{');
-    const braceEnd = rawText.lastIndexOf('}');
-    if (braceStart !== -1 && braceEnd > braceStart) {
-        try {
-            return normalizeResponse(JSON.parse(rawText.slice(braceStart, braceEnd + 1)));
-        } catch {
-            // continue
-        }
+    // 提取平衡对象
+    const balanced = extractBalancedObject(rawText);
+    if (balanced) {
+        const parsed = parseCandidate(balanced);
+        if (parsed) return parsed;
+    }
+
+    // 截断修复（优先救回 diagnostic_report/lightroom_params）
+    const repaired = repairPossiblyTruncatedJson(rawText);
+    if (repaired) {
+        const parsed = parseCandidate(repaired);
+        if (parsed) return parsed;
     }
 
     console.error('[AI Parse Failed] Raw text preview:', rawText.slice(0, 300));

@@ -71,7 +71,7 @@ export function RightPanel({
   }
 
   return (
-    <aside className="flex w-[360px] shrink-0 flex-col border-l border-border/80 bg-sidebar">
+    <aside className="flex min-h-0 w-[360px] shrink-0 flex-col border-l border-border/80 bg-sidebar">
       {/* Tab switcher */}
       {hasAnalysis && (
         <div className="flex shrink-0 border-b border-border">
@@ -98,7 +98,7 @@ export function RightPanel({
         </div>
       )}
 
-      <ScrollArea className="flex-1">
+      <ScrollArea className="min-h-0 flex-1">
         <div className="flex flex-col">
           {/* Report Tab */}
           {(activeTab === "report" || !hasAnalysis) && (

@@ -1,4 +1,9 @@
 export interface DiagnosticReport {
+  score: {
+    total: number
+    grade: "S" | "A" | "B" | "C" | "D"
+    tag: string
+  }
   thinkingSteps: {
     label: string
     completed: boolean

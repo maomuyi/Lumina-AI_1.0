@@ -50,25 +50,34 @@ interface CenterCanvasProps {
 
 // Zoom presets
 const ZOOM_STEPS = [0.1, 0.25, 0.33, 0.5, 0.67, 0.75, 1, 1.25, 1.5, 2, 3, 4, 5]
-const MIN_ZOOM = 0.05
-const MAX_ZOOM = 8
+const MAX_ZOOM = 12
 const WHEEL_ZOOM_FACTOR = 0.001
 
-function clampZoom(z: number) {
-  return Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, z))
+function getMinZoom(naturalSize: { w: number; h: number }) {
+  if (!naturalSize.w || !naturalSize.h) return 0.01
+  // 最小缩放：将较长边压缩到约 1px（近似 1px * 1px 最小视觉态）
+  return Math.max(0.0008, 1 / Math.max(naturalSize.w, naturalSize.h))
 }
 
-function snapToStep(z: number, direction: "in" | "out"): number {
+function clampZoom(z: number, naturalSize: { w: number; h: number }) {
+  return Math.min(MAX_ZOOM, Math.max(getMinZoom(naturalSize), z))
+}
+
+function snapToStep(
+  z: number,
+  direction: "in" | "out",
+  naturalSize: { w: number; h: number }
+): number {
   if (direction === "in") {
     for (const s of ZOOM_STEPS) {
       if (s > z + 0.01) return s
     }
-    return clampZoom(z * 1.25)
+    return clampZoom(z * 1.25, naturalSize)
   } else {
     for (let i = ZOOM_STEPS.length - 1; i >= 0; i--) {
       if (ZOOM_STEPS[i] < z - 0.01) return ZOOM_STEPS[i]
     }
-    return clampZoom(z / 1.25)
+    return clampZoom(z / 1.25, naturalSize)
   }
 }
 
@@ -86,10 +95,30 @@ export function CenterCanvas({
   const [isFitMode, setIsFitMode] = useState(true)
   const [pan, setPan] = useState({ x: 0, y: 0 })
   const [isPanning, setIsPanning] = useState(false)
+  const [isHandToolActive, setIsHandToolActive] = useState(false)
   const [naturalSize, setNaturalSize] = useState({ w: 0, h: 0 })
 
   const containerRef = useRef<HTMLDivElement>(null)
   const panStartRef = useRef({ x: 0, y: 0, panX: 0, panY: 0 })
+  const canPan = Boolean(imageUrl) && (isHandToolActive || scale > fitScale + 0.001)
+
+  const clampPanToBounds = useCallback(
+    (nextPan: { x: number; y: number }, nextScale = scale) => {
+      if (!containerRef.current || !naturalSize.w || !naturalSize.h) return nextPan
+
+      const rect = containerRef.current.getBoundingClientRect()
+      const scaledW = naturalSize.w * nextScale
+      const scaledH = naturalSize.h * nextScale
+      const maxX = Math.max(0, (scaledW - rect.width) / 2)
+      const maxY = Math.max(0, (scaledH - rect.height) / 2)
+
+      return {
+        x: Math.min(maxX, Math.max(-maxX, nextPan.x)),
+        y: Math.min(maxY, Math.max(-maxY, nextPan.y)),
+      }
+    },
+    [naturalSize, scale]
+  )
 
   // Compute fit scale when image loads or container resizes
   const computeFitScale = useCallback(() => {
@@ -100,7 +129,7 @@ export function CenterCanvas({
     const availW = rect.width - padX
     const availH = rect.height - padY
     const s = Math.min(availW / naturalSize.w, availH / naturalSize.h, 1)
-    return Math.max(s, MIN_ZOOM)
+    return Math.max(s, getMinZoom(naturalSize))
   }, [naturalSize])
 
   useEffect(() => {
@@ -109,8 +138,10 @@ export function CenterCanvas({
     if (isFitMode) {
       setScale(fs)
       setPan({ x: 0, y: 0 })
+    } else {
+      setPan((p) => clampPanToBounds(p, scale))
     }
-  }, [computeFitScale, isFitMode])
+  }, [computeFitScale, isFitMode, clampPanToBounds, scale])
 
   // Observe container resize
   useEffect(() => {
@@ -122,11 +153,13 @@ export function CenterCanvas({
       if (isFitMode) {
         setScale(fs)
         setPan({ x: 0, y: 0 })
+      } else {
+        setPan((p) => clampPanToBounds(p, scale))
       }
     })
     ro.observe(el)
     return () => ro.disconnect()
-  }, [computeFitScale, isFitMode])
+  }, [computeFitScale, isFitMode, clampPanToBounds, scale])
 
   // Image load handler
   const handleImageLoad = useCallback(
@@ -153,24 +186,25 @@ export function CenterCanvas({
       if (!containerRef.current || !naturalSize.w) return
       e.preventDefault()
 
-      const delta = -e.deltaY * WHEEL_ZOOM_FACTOR
+      const nextScaleRatio = Math.exp(-e.deltaY * WHEEL_ZOOM_FACTOR * 1.2)
       const rect = containerRef.current.getBoundingClientRect()
       const cursorX = e.clientX - rect.left - rect.width / 2
       const cursorY = e.clientY - rect.top - rect.height / 2
 
       setScale((prev) => {
-        const next = clampZoom(prev * (1 + delta * prev))
-        // Adjust pan so zoom focuses on cursor
+        const next = clampZoom(prev * nextScaleRatio, naturalSize)
         const ratio = next / prev
         setPan((p) => ({
-          x: cursorX - ratio * (cursorX - p.x),
-          y: cursorY - ratio * (cursorY - p.y),
+          ...clampPanToBounds({
+            x: cursorX - ratio * (cursorX - p.x),
+            y: cursorY - ratio * (cursorY - p.y),
+          }, next),
         }))
         setIsFitMode(false)
         return next
       })
     },
-    [naturalSize]
+    [naturalSize, clampPanToBounds]
   )
 
   useEffect(() => {
@@ -183,19 +217,19 @@ export function CenterCanvas({
   // Mouse drag to pan
   const handleMouseDown = useCallback(
     (e: React.MouseEvent) => {
-      // Only pan when zoomed in beyond fit, or on middle button
-      if (e.button === 1 || scale > fitScale + 0.01) {
-        e.preventDefault()
-        setIsPanning(true)
-        panStartRef.current = {
-          x: e.clientX,
-          y: e.clientY,
-          panX: pan.x,
-          panY: pan.y,
-        }
+      if (!imageUrl) return
+      if (e.button !== 0 && e.button !== 1) return
+      if (!canPan) return
+      e.preventDefault()
+      setIsPanning(true)
+      panStartRef.current = {
+        x: e.clientX,
+        y: e.clientY,
+        panX: pan.x,
+        panY: pan.y,
       }
     },
-    [scale, fitScale, pan]
+    [imageUrl, pan, canPan]
   )
 
   const handleMouseMove = useCallback(
@@ -203,12 +237,12 @@ export function CenterCanvas({
       if (!isPanning) return
       const dx = e.clientX - panStartRef.current.x
       const dy = e.clientY - panStartRef.current.y
-      setPan({
+      setPan(clampPanToBounds({
         x: panStartRef.current.panX + dx,
         y: panStartRef.current.panY + dy,
-      })
+      }))
     },
-    [isPanning]
+    [isPanning, clampPanToBounds]
   )
 
   const handleMouseUp = useCallback(() => {
@@ -219,27 +253,36 @@ export function CenterCanvas({
   const handleDoubleClick = useCallback(
     (e: React.MouseEvent) => {
       if (!containerRef.current) return
+      if (!naturalSize.w) return
 
-      if (Math.abs(scale - 1) < 0.01 && !isFitMode) {
-        // At 100% -> go to fit
+      const rect = containerRef.current.getBoundingClientRect()
+      const cursorX = e.clientX - rect.left - rect.width / 2
+      const cursorY = e.clientY - rect.top - rect.height / 2
+      const nearScale = (target: number) => Math.abs(scale - target) < 0.03
+      const setZoomAroundCursor = (nextScale: number) => {
+        const ratio = nextScale / scale
+        setPan(
+          clampPanToBounds({
+            x: cursorX - ratio * (cursorX - pan.x),
+            y: cursorY - ratio * (cursorY - pan.y),
+          }, nextScale)
+        )
+        setScale(nextScale)
+        setIsFitMode(false)
+      }
+
+      // 商业化双击节奏：Fit -> 100% -> 200% -> Fit
+      if (isFitMode || nearScale(fitScale)) {
+        setZoomAroundCursor(1)
+      } else if (nearScale(1)) {
+        setZoomAroundCursor(Math.min(2, MAX_ZOOM))
+      } else {
         setIsFitMode(true)
         setScale(fitScale)
         setPan({ x: 0, y: 0 })
-      } else {
-        // Go to 100% centered on cursor
-        const rect = containerRef.current.getBoundingClientRect()
-        const cursorX = e.clientX - rect.left - rect.width / 2
-        const cursorY = e.clientY - rect.top - rect.height / 2
-        const ratio = 1 / scale
-        setPan({
-          x: cursorX - ratio * (cursorX - pan.x),
-          y: cursorY - ratio * (cursorY - pan.y),
-        })
-        setScale(1)
-        setIsFitMode(false)
       }
     },
-    [scale, fitScale, isFitMode, pan]
+    [scale, fitScale, isFitMode, pan, clampPanToBounds, naturalSize]
   )
 
   // Toolbar actions
@@ -252,24 +295,26 @@ export function CenterCanvas({
   const handleZoom100 = useCallback(() => {
     setScale(1)
     setIsFitMode(false)
-    setPan({ x: 0, y: 0 })
-  }, [])
+    setPan((p) => clampPanToBounds(p, 1))
+  }, [clampPanToBounds])
 
   const handleZoomIn = useCallback(() => {
     setScale((prev) => {
-      const next = clampZoom(snapToStep(prev, "in"))
+      const next = clampZoom(snapToStep(prev, "in", naturalSize), naturalSize)
+      setPan((p) => clampPanToBounds(p, next))
       setIsFitMode(false)
       return next
     })
-  }, [])
+  }, [naturalSize, clampPanToBounds])
 
   const handleZoomOut = useCallback(() => {
     setScale((prev) => {
-      const next = clampZoom(snapToStep(prev, "out"))
+      const next = clampZoom(snapToStep(prev, "out", naturalSize), naturalSize)
+      setPan((p) => clampPanToBounds(p, next))
       setIsFitMode(false)
       return next
     })
-  }, [])
+  }, [naturalSize, clampPanToBounds])
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -277,6 +322,11 @@ export function CenterCanvas({
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return
       const isMeta = e.metaKey || e.ctrlKey
 
+      if (e.code === "Space" && imageUrl) {
+        e.preventDefault()
+        setIsHandToolActive(true)
+        return
+      }
       if (isMeta && (e.key === "=" || e.key === "+")) {
         e.preventDefault()
         handleZoomIn()
@@ -291,15 +341,29 @@ export function CenterCanvas({
         handleZoom100()
       }
     }
+    const keyupHandler = (e: KeyboardEvent) => {
+      if (e.code === "Space") {
+        setIsHandToolActive(false)
+      }
+    }
+    const blurHandler = () => setIsHandToolActive(false)
     window.addEventListener("keydown", handler)
-    return () => window.removeEventListener("keydown", handler)
-  }, [handleZoomIn, handleZoomOut, handleFit, handleZoom100])
+    window.addEventListener("keyup", keyupHandler)
+    window.addEventListener("blur", blurHandler)
+    return () => {
+      window.removeEventListener("keydown", handler)
+      window.removeEventListener("keyup", keyupHandler)
+      window.removeEventListener("blur", blurHandler)
+    }
+  }, [handleZoomIn, handleZoomOut, handleFit, handleZoom100, imageUrl])
 
   const displayPercent = Math.round(scale * 100)
   const cursorStyle = isPanning
     ? "grabbing"
-    : scale > fitScale + 0.01
+    : canPan
       ? "grab"
+      : imageUrl
+        ? "zoom-in"
       : "default"
 
   return (

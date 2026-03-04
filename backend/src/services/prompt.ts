@@ -93,6 +93,14 @@ Key 必须完全等同于 Adobe XMP 官方标准命名。
 - module_4_core_actions：至少 6 条；每条都必须使用格式 "【参数名】值：物理依据 + 预期收益 + 风险防范"，禁止空泛描述。
 - 禁止模板化废话（例如“整体不错”“建议微调”），每句都要能落到输入数据或参数动作上。
 
+[JSON Stability Requirements / 稳定输出硬要求]
+- 只允许返回一个完整 JSON 对象，第一字符必须是 {，最后字符必须是 }。
+- 禁止输出 markdown 代码块、解释文字、前后缀、注释、尾逗号。
+- 为避免截断，请保持文本简洁：
+  - module_1_diagnosis / module_2_physics / module_3_strategy 每段 <= 220 字；
+  - module_4_core_actions 固定输出 6 条，单条 <= 60 字。
+- 若 token 不足，优先保证 JSON 完整闭合，再压缩文本长度。
+
 你必须且只能返回以下 JSON 结构，禁止输出任何 Markdown 标记或多余文字：
 
 {
@@ -137,7 +145,8 @@ ${userIntent ? `\n[用户自然语言意图]: ${userIntent}` : ''}
 
 请结合上方的物理数据和随附的视觉预览图，严格按照 System Prompt 中的 5 步工作流执行推导，输出 JSON。
 
-提醒：这次任务是双轨融合分析（视觉语义 + RAW/JPG 物理数据）。diagnostic_report 必须体现两条轨道如何共同约束参数。`;
+提醒：这次任务是双轨融合分析（视觉语义 + RAW/JPG 物理数据）。diagnostic_report 必须体现两条轨道如何共同约束参数。
+重要：请把输出控制在紧凑长度，并确保 JSON 从 { 开始到 } 结束且完整闭合。`;
 }
 
 /**

@@ -2,6 +2,7 @@
 
 import { useState } from "react"
 import type { DiagnosticReport } from "@/lib/image-analysis"
+import { Badge } from "@/components/ui/badge"
 import {
   ChevronDown,
   ChevronRight,
@@ -16,11 +17,57 @@ interface AiDiagnosticReportProps {
   report: DiagnosticReport
 }
 
+function scoreTone(score: number): {
+  color: string
+  softBg: string
+  ring: string
+} {
+  const normalized = Math.min(100, Math.max(0, score))
+  const hue = (normalized / 100) * 120
+  return {
+    color: `hsl(${hue} 78% 47%)`,
+    softBg: `hsl(${hue} 70% 22% / 0.20)`,
+    ring: `hsl(${hue} 78% 47% / 0.45)`,
+  }
+}
+
 export function AiDiagnosticReport({ report }: AiDiagnosticReportProps) {
   const [thinkingOpen, setThinkingOpen] = useState(false)
+  const tone = scoreTone(report.score.total)
 
   return (
     <div className="flex flex-col gap-4">
+      <div
+        className="relative overflow-hidden rounded-xl p-4 ring-1"
+        style={{
+          background: `linear-gradient(160deg, ${tone.softBg}, rgba(255,255,255,0.02))`,
+          boxShadow: `inset 0 0 0 1px ${tone.ring}`,
+        }}
+      >
+        <div className="pointer-events-none absolute -right-4 -top-4 h-24 w-24 rounded-full border-2 opacity-50" style={{ borderColor: tone.ring }} />
+        <div className="pointer-events-none absolute right-6 top-4 -rotate-[11deg] font-mono text-[42px] font-extrabold tracking-tight" style={{ color: tone.color }}>
+          {report.score.total}
+        </div>
+        <div className="pr-24">
+          <p className="text-[10px] tracking-widest text-muted-foreground/70">老师批注评分</p>
+          <div className="mt-1 flex items-center gap-2">
+            <span
+              className="inline-flex h-8 w-8 items-center justify-center rounded-full border text-[14px] font-bold"
+              style={{ borderColor: tone.ring, color: tone.color, background: tone.softBg }}
+            >
+              {report.score.grade}
+            </span>
+            <Badge
+              variant="outline"
+              className="border-[1.5px] bg-transparent text-[11px]"
+              style={{ borderColor: tone.ring, color: tone.color }}
+            >
+              {report.score.tag}
+            </Badge>
+          </div>
+        </div>
+      </div>
+
       {/* AI Thinking Process (collapsible) */}
       <div className="rounded-lg bg-secondary/50 ring-1 ring-border">
         <button
@@ -165,7 +212,7 @@ export function AiDiagnosticReport({ report }: AiDiagnosticReportProps) {
                   {action.value}
                 </span>
               </div>
-              <span className="flex-1 text-[10px] leading-relaxed text-muted-foreground/75">
+              <span className="flex-1 break-words text-[10px] leading-relaxed text-muted-foreground/75">
                 {action.reason}
               </span>
             </div>

@@ -24,8 +24,10 @@ export function Histogram({ data }: HistogramProps) {
 
     return channels.map(({ values, color, key }) => {
       const max = Math.max(...values, 1)
+      const length = values.length
+      const denominator = Math.max(1, length - 1)
       const points = values.map((v, i) => {
-        const x = (i / 255) * width
+        const x = (i / denominator) * width
         const y = height - (v / max) * height
         return `${x},${y}`
       })

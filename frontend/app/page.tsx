@@ -24,6 +24,90 @@ import {
 import { useRawParser } from "@/hooks/useRawParser"
 import { Toaster, toast } from "sonner"
 
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value))
+}
+
+function avg(arr: number[]): number {
+  if (arr.length === 0) return 0
+  return arr.reduce((sum, n) => sum + n, 0) / arr.length
+}
+
+function computeStrictScore(
+  rawPayload: RawDataPayload,
+  coreActionCount: number
+): { total: number; grade: "S" | "A" | "B" | "C" | "D"; tag: string } {
+  const sp = rawPayload.sensor_physics
+  const hist = rawPayload.linear_histogram ?? []
+  const totalHist = Math.max(1, hist.reduce((sum, v) => sum + v, 0))
+  const leftTail = hist.slice(0, Math.min(3, hist.length)).reduce((sum, v) => sum + v, 0) / totalHist
+  const rightTail = hist.slice(Math.max(0, hist.length - 3)).reduce((sum, v) => sum + v, 0) / totalHist
+  const peakIdx = hist.length
+    ? hist.reduce((best, val, idx) => (val > hist[best] ? idx : best), 0)
+    : 0
+  const peakNorm = hist.length > 1 ? peakIdx / (hist.length - 1) : 0.5
+
+  const clipPenalty = clamp(sp.highlight_clipping_rate * 1200, 0, 55)
+  const shadowPenalty = clamp((1 - sp.shadow_survival_rate) * 800, 0, 35)
+  const bitDepthPenalty = sp.bit_depth <= 8 ? 12 : sp.bit_depth <= 10 ? 6 : 0
+  const dr = clamp(100 - clipPenalty - shadowPenalty - bitDepthPenalty, 0, 100)
+
+  const tailPenalty = clamp((leftTail + rightTail) * 900, 0, 40)
+  const imbalancePenalty = clamp(Math.abs(peakNorm - 0.5) * 60, 0, 20)
+  const exp = clamp(100 - tailPenalty - imbalancePenalty, 0, 100)
+
+  const multipliers = sp.raw_channel_multipliers ?? []
+  const hasChannels = multipliers.length >= 3
+  const wbDeviation = hasChannels ? avg([Math.abs(multipliers[0] - 1), Math.abs(multipliers[2] - 1)]) : 0.5
+  const wbPenalty = clamp(wbDeviation * 70, 0, 35)
+  const gamutPenalty = (rawPayload.color_space === "unknown" ? 8 : 0) + (rawPayload.icc_profile === "unknown" ? 5 : 0)
+  const color = clamp(100 - wbPenalty - gamutPenalty, 0, 100)
+
+  const iso = rawPayload.exif.iso ?? 200
+  const isoPenalty =
+    iso >= 6400 ? 30 :
+      iso >= 3200 ? 22 :
+        iso >= 1600 ? 14 :
+          iso >= 800 ? 8 : 0
+  const bandingPenalty =
+    sp.banding_risk === "high" ? 25 :
+      sp.banding_risk === "medium" ? 10 : 0
+  const jpgPenalty = rawPayload.file_type === "JPG" ? 6 : 0
+  const snr = clamp(100 - isoPenalty - bandingPenalty - jpgPenalty, 0, 100)
+
+  const quality = 0.4 * dr + 0.25 * exp + 0.2 * color + 0.15 * snr
+
+  const reportClarity = clamp(
+    55 +
+    (hist.length >= 64 ? 10 : 4) +
+    (sp.bit_depth >= 12 ? 8 : 3) +
+    (rawPayload.exif.iso ? 6 : 0) +
+    (rawPayload.color_space && rawPayload.color_space !== "unknown" ? 6 : 0),
+    0,
+    100
+  )
+  const actionability = clamp(35 + coreActionCount * 8, 0, 100)
+  const insight = 0.55 * reportClarity + 0.45 * actionability
+
+  const mood = clamp(55 + 0.35 * (quality - 60), 45, 85)
+
+  const total = Math.round(clamp(0.7 * quality + 0.2 * insight + 0.1 * mood, 0, 100))
+
+  const grade: "S" | "A" | "B" | "C" | "D" =
+    total >= 92 ? "S" :
+      total >= 84 ? "A" :
+        total >= 74 ? "B" :
+          total >= 62 ? "C" : "D"
+
+  const tag =
+    total >= 90 ? "可直接出片" :
+      total >= 80 ? "专业可调" :
+        total >= 70 ? "可优化" :
+          total >= 62 ? "建议重调" : "建议重拍/强风格化"
+
+  return { total, grade, tag }
+}
+
 export default function HomePage() {
   const [imageUrl, setImageUrl] = useState<string | null>(null)
   const [fileName, setFileName] = useState<string | null>(null)
@@ -218,6 +302,7 @@ export default function HomePage() {
       }
 
       const report: DiagnosticReport = {
+        score: computeStrictScore(rawPayload, dr.module_4_core_actions.length),
         thinkingSteps: [
           { label: `提取底层数据：已读取${sp.bit_depth}-bit数据并分析线性直方图`, completed: true },
           { label: "检测画质风险：已扫描高光溢出与暗部压缩", completed: true },
