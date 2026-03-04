@@ -4,6 +4,18 @@
 
 ---
 
+## [0.1.3] — 2026-03-04
+
+### Added（新增）
+- 新增 `backend/templates/LightroomPresetStandard.xmp`，直接采用 Lightroom 官方导出的预设文件作为唯一标准模板。
+
+### Changed（变更）
+- XMP 生成链路切换为“官方标准模板注入”模式：不再依赖 Handlebars 占位模板，按 `crs:*` 属性与曲线节点进行精确替换。
+- 生成预设时自动刷新 `crs:UUID`，并将预设名标准化为 `Lumina_YYYYMMDD`。
+
+### Fixed（修复）
+- 清理模板中的本地蒙版遗留数据：`MaskGroupBasedCorrections` 强制输出空序列，避免导出预设携带与具体图片绑定的局部遮罩。
+
 ## [0.1.2] — 2026-03-04
 
 ### Added（新增）

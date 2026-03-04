@@ -2,7 +2,7 @@
 
 > 上传照片，AI 生成专业级 Lightroom 调色预设（.xmp），一键下载导入。
 
-当前版本：`v0.1.2`（2026-03-04）
+当前版本：`v0.1.3`（2026-03-04）
 
 Lumina 通过**前端 WASM 深度解析 RAW 底层物理数据** + **多模态大模型双维推理**，生成精准的 Lightroom 调色参数，并输出专业的"AI 调色诊断报告"。
 
@@ -13,7 +13,7 @@ Lumina 通过**前端 WASM 深度解析 RAW 底层物理数据** + **多模态�
 - **前端重解析**：基于 LibRaw WASM 在浏览器本地解码 NEF（14-bit RAW），提取线性直方图、宽容度余量、RGGB 通道偏移等物理数据，无需上传 45MB 原始文件。
 - **双轨分析**：视觉轨（内嵌预览图 → 多模态大模型识别语义）+ 数据轨（物理特征 JSON → 约束调色参数边界）。
 - **专业诊断报告**：四模块结构化报告（核心结论 → 底层剖析 → 美化建议 → 参数动作），兼顾小白与老手。
-- **XMP 模板引擎**：Handlebars 模板注入法生成 100% 兼容 Lightroom 的 .xmp 预设，锁死 Adobe Color 基准 + 镜头校正。
+- **XMP 模板引擎**：以 Lightroom 官方导出的预设文件作为唯一标准模板，按参数注入生成 100% 兼容 `.xmp`。
 - **多轮微调**：支持自然语言多轮对话（"肤色再亮一点"、"冷色调"），基于 Redis Session 复用上下文，无需重传图片。
 - **Lightroom 风格 UI**：填充式滑块、色彩编码 HSL 轨道、紧凑 22px 行高，还原专业调色体验。
 
@@ -92,12 +92,12 @@ Lumina/
 │       │   ├── llm.ts          # OpenAI SDK 双模型调度
 │       │   ├── prompt.ts       # System Prompt + 用户 Prompt
 │       │   ├── session.ts      # Redis Session 管理
-│       │   └── xmp.ts          # XMP 模板引擎
+│       │   └── xmp.ts          # XMP 标准模板注入引擎
 │       ├── utils/
 │       │   ├── parseAI.ts      # 三层 JSON 解析防御
 │       │   └── clampParams.ts  # 参数范围校验
 │       └── templates/
-│           └── BaseTemplate.xmp
+│           └── LightroomPresetStandard.xmp
 │
 └── AI_CONTEXT.md               # AI 上下文指导书
 ```

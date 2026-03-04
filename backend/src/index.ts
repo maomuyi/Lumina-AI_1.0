@@ -98,7 +98,7 @@ async function main() {
     fastify.get('/health', async () => ({
         status: 'ok',
         timestamp: new Date().toISOString(),
-        version: '0.1.2',
+        version: '0.1.3',
     }));
 
     // ── 注册业务路由 ────────────────────────────────────────────────────
@@ -151,7 +151,7 @@ async function main() {
         await fastify.listen({ port: PORT, host: HOST });
         console.log(`
 ╔══════════════════════════════════════════════════╗
-║  🎨 Lumina Backend v0.1.2                        ║
+║  🎨 Lumina Backend v0.1.3                        ║
 ║                                                  ║
 ║  API:    http://${HOST}:${PORT}                   ║
 ║  Health: http://${HOST}:${PORT}/health            ║
