@@ -15,9 +15,12 @@ import {
 } from "@/lib/image-analysis"
 import {
   analyzeWithSSE,
+  computeImageFingerprint,
   refineWithSSE,
   generateXmp,
   getDownloadUrl,
+  isPublicVisionUrlRequirementError,
+  isRateLimitError,
   type SSEFinalEvent,
   type SSEProgressEvent,
 } from "@/lib/api"
@@ -135,7 +138,10 @@ export default function HomePage() {
   const [downloadUrl, setDownloadUrl] = useState<string | null>(null)
   const [isGeneratingXmp, setIsGeneratingXmp] = useState(false)
   const [sessionId, setSessionId] = useState<string | null>(null)
+  const [currentRevision, setCurrentRevision] = useState<number | null>(null)
   const [analysisRawPayload, setAnalysisRawPayload] = useState<RawDataPayload | null>(null)
+  const [currentPreviewBlob, setCurrentPreviewBlob] = useState<Blob | null>(null)
+  const [currentImageFingerprint, setCurrentImageFingerprint] = useState<string | null>(null)
 
   const rawParser = useRawParser()
   const streamedTextRef = useRef("")
@@ -200,7 +206,10 @@ export default function HomePage() {
       setParams(getDefaultParams())
       setDownloadUrl(null)
       setSessionId(null)
+      setCurrentRevision(null)
       setAnalysisRawPayload(null)
+      setCurrentPreviewBlob(null)
+      setCurrentImageFingerprint(null)
       setAnalysisStage(null)
       setAnalysisEvents([])
       rawParser.reset()
@@ -265,6 +274,24 @@ export default function HomePage() {
     }
     return buildJpgDataPayload(currentFile)
   }, [fileType, rawParser.state, rawParser.result, currentFile])
+
+  const buildPreviewBlob = useCallback(async (): Promise<Blob> => {
+    if (fileType === "nef") {
+      const previewUrl = rawParser.result?.previewObjectUrl
+      if (!previewUrl) {
+        throw new Error("NEF 预览图缺失，请先完成 RAW 解析")
+      }
+      const resp = await fetch(previewUrl)
+      const originalPreviewBlob = await resp.blob()
+      return compressPreviewBlob(originalPreviewBlob)
+    }
+
+    if (!currentFile) {
+      throw new Error("没有可用的预览图")
+    }
+
+    return buildJpgPreviewBlob(currentFile)
+  }, [currentFile, fileType, rawParser.result])
 
   const convertToDiagnosticReport = useCallback(
     (data: SSEFinalEvent, rawPayload: RawDataPayload): { diagnostics: ImageDiagnostics; report: DiagnosticReport } => {
@@ -427,27 +454,17 @@ export default function HomePage() {
       setAnalysisStage({ stage: 1, message: "数据轨准备完成，正在压缩与上传预览图..." })
       setAnalysisProgress(18)
       pushAnalysisEvent("数据轨准备完成，正在压缩并上传预览图...")
-
-      let previewBlob: Blob
-      if (fileType === "nef") {
-        const previewUrl = rawParser.result?.previewObjectUrl
-        if (!previewUrl) {
-          throw new Error("NEF 预览图缺失，请先完成 RAW 解析")
-        }
-        const resp = await fetch(previewUrl)
-        const originalPreviewBlob = await resp.blob()
-        previewBlob = await compressPreviewBlob(originalPreviewBlob)
-      } else if (currentFile) {
-        previewBlob = await buildJpgPreviewBlob(currentFile)
-      } else {
-        throw new Error("没有可用的预览图")
-      }
+      const previewBlob = await buildPreviewBlob()
+      const imageFingerprint = await computeImageFingerprint(previewBlob)
+      setCurrentPreviewBlob(previewBlob)
+      setCurrentImageFingerprint(imageFingerprint)
+      setCurrentRevision(null)
 
       setAnalysisStage({ stage: 2, message: "AI 正在深度推理，请稍候..." })
       setAnalysisProgress(30)
       pushAnalysisEvent("已提交到模型，正在进行视觉+数据双轨推理...")
 
-      await analyzeWithSSE(previewBlob, rawPayload, userIntent, selectedStyle, {
+      await analyzeWithSSE(previewBlob, rawPayload, userIntent, selectedStyle, imageFingerprint, {
         onText(text) {
           streamedTextRef.current += text
           setAnalysisProgress((prev) => Math.min(92, prev + 0.3))
@@ -458,6 +475,7 @@ export default function HomePage() {
         onFinal(data) {
           setAnalysisProgress(100)
           setSessionId(data.session_id ?? null)
+          setCurrentRevision(data.revision ?? 1)
           setDownloadUrl(data.download_url)
           setAnalysisRawPayload(rawPayload)
 
@@ -501,8 +519,24 @@ export default function HomePage() {
       setAnalysisProgress(0)
       setAnalysisStage(null)
       setAnalysisEvents([])
+
+      const message = err instanceof Error ? err.message : "请稍后重试"
+      if (isPublicVisionUrlRequirementError(message)) {
+        toast.error("当前视觉模型需要公网图片地址", {
+          description:
+            "当前 provider 无法直接读取本地 base64 图片。请为后端配置 PUBLIC_API_BASE_URL 指向公网域名，或切换到支持 data URL 的视觉 provider。",
+        })
+        return
+      }
+      if (isRateLimitError(message)) {
+        toast.error("请求过于频繁", {
+          description: message,
+        })
+        return
+      }
+
       toast.error("分析失败", {
-        description: err instanceof Error ? err.message : "请稍后重试",
+        description: message,
       })
     }
   }, [
@@ -513,7 +547,7 @@ export default function HomePage() {
     userIntent,
     selectedStyle,
     convertToDiagnosticReport,
-    currentFile,
+    buildPreviewBlob,
     setAnalysisEvents,
   ])
 
@@ -526,7 +560,10 @@ export default function HomePage() {
     if (!diagnostics) return
     setIsGeneratingXmp(true)
     try {
-      const { download_url } = await generateXmp(params)
+      const { download_url } = await generateXmp(params, {
+        sessionId: sessionId ?? undefined,
+        revision: currentRevision ?? undefined,
+      })
       setDownloadUrl(download_url)
       toast.success("XMP 已生成", { description: "已根据当前参数生成最新文件" })
     } catch (err) {
@@ -553,6 +590,8 @@ export default function HomePage() {
   const handleRegenerate = useCallback(() => {
     if (!fileType) return
     setDownloadUrl(null)
+    setSessionId(null)
+    setCurrentRevision(null)
     handleAnalyze()
   }, [fileType, handleAnalyze])
 
@@ -560,7 +599,7 @@ export default function HomePage() {
     async (text: string) => {
       setUserIntent(text)
 
-      if (sessionId) {
+      if (sessionId && currentRevision && currentImageFingerprint && currentPreviewBlob) {
         setIsAnalyzing(true)
         setAnalysisProgress(0)
         setAnalysisStage({ stage: 2, message: `AI 正在根据"${text}"重新调整参数...` })
@@ -569,60 +608,70 @@ export default function HomePage() {
 
         try {
           const payloadForReport = analysisRawPayload ?? (await buildRawDataPayload())
-          await refineWithSSE(sessionId, text, {
-            onText() {
-              setAnalysisProgress((prev) => Math.min(90, prev + 1))
-            },
-            onProgress(event) {
-              const pct = Math.max(0, Math.min(100, Math.round(event.progress)))
-              const stageIdx = pct < 35 ? 0 : pct < 75 ? 1 : 2
-              setAnalysisProgress((prev) => (pct > prev ? pct : prev))
-              setAnalysisStage({ stage: stageIdx, message: event.message })
-              setAnalysisEvents((prev) => {
-                if (prev.length > 0 && prev[prev.length - 1] === event.message) return prev
-                return [...prev.slice(-5), event.message]
-              })
-            },
-            onFinal(data) {
-              setAnalysisProgress(100)
-              setDownloadUrl(data.download_url)
-              if (data.session_id) {
-                setSessionId(data.session_id)
-              }
-
-              const newParams = { ...getDefaultParams() }
-              const modifiedKeys = new Set<string>()
-              for (const [key, value] of Object.entries(data.lightroom_params)) {
-                if (typeof value === "number") {
-                  newParams[key] = value
-                  modifiedKeys.add(key)
+          await refineWithSSE({
+            sessionId,
+            revision: currentRevision,
+            imageFingerprint: currentImageFingerprint,
+            newIntent: text,
+            previewBlob: currentPreviewBlob,
+            rawData: payloadForReport,
+            callbacks: {
+              onText() {
+                setAnalysisProgress((prev) => Math.min(90, prev + 1))
+              },
+              onProgress(event) {
+                const pct = Math.max(0, Math.min(100, Math.round(event.progress)))
+                const stageIdx = pct < 35 ? 0 : pct < 75 ? 1 : 2
+                setAnalysisProgress((prev) => (pct > prev ? pct : prev))
+                setAnalysisStage({ stage: stageIdx, message: event.message })
+                setAnalysisEvents((prev) => {
+                  if (prev.length > 0 && prev[prev.length - 1] === event.message) return prev
+                  return [...prev.slice(-5), event.message]
+                })
+              },
+              onFinal(data) {
+                setAnalysisProgress(100)
+                setDownloadUrl(data.download_url)
+                if (data.session_id) {
+                  setSessionId(data.session_id)
                 }
-              }
-              setParams(newParams)
-              setAiRecommendedParams(
-                Object.fromEntries(
-                  Object.entries(data.lightroom_params).filter(([, v]) => typeof v === "number")
-                ) as Record<string, number>
-              )
-              setAiModifiedKeys(modifiedKeys)
+                setCurrentRevision(data.revision ?? currentRevision + 1)
 
-              const { diagnostics: d, report: r } = convertToDiagnosticReport(data, payloadForReport)
-              setDiagnostics(d)
-              setReport(r)
+                const newParams = { ...getDefaultParams() }
+                const modifiedKeys = new Set<string>()
+                for (const [key, value] of Object.entries(data.lightroom_params)) {
+                  if (typeof value === "number") {
+                    newParams[key] = value
+                    modifiedKeys.add(key)
+                  }
+                }
+                setParams(newParams)
+                setAiRecommendedParams(
+                  Object.fromEntries(
+                    Object.entries(data.lightroom_params).filter(([, v]) => typeof v === "number")
+                  ) as Record<string, number>
+                )
+                setAiModifiedKeys(modifiedKeys)
 
-              setTimeout(() => {
-                setAnalysisProgress(0)
-                setIsAnalyzing(false)
-                setAnalysisStage(null)
-                setAnalysisEvents([])
-              }, 500)
+                const { diagnostics: d, report: r } = convertToDiagnosticReport(data, payloadForReport)
+                setDiagnostics(d)
+                setReport(r)
+                setAnalysisRawPayload(payloadForReport)
 
-              toast.success("调整完成", {
-                description: `已根据"${text}"重新生成调色方案`,
-              })
-            },
-            onError(message) {
-              throw new Error(message)
+                setTimeout(() => {
+                  setAnalysisProgress(0)
+                  setIsAnalyzing(false)
+                  setAnalysisStage(null)
+                  setAnalysisEvents([])
+                }, 500)
+
+                toast.success("调整完成", {
+                  description: `已根据"${text}"重新生成调色方案`,
+                })
+              },
+              onError(message) {
+                throw new Error(message)
+              },
             },
           })
         } catch (err) {
@@ -630,8 +679,19 @@ export default function HomePage() {
           setAnalysisProgress(0)
           setAnalysisStage(null)
           setAnalysisEvents([])
+          const message = err instanceof Error ? err.message : "请稍后重试"
+          if (isRateLimitError(message)) {
+            toast.error("请求过于频繁", {
+              description: message,
+            })
+            return
+          }
+          if (message.includes("409")) {
+            setSessionId(null)
+            setCurrentRevision(null)
+          }
           toast.error("微调失败", {
-            description: err instanceof Error ? err.message : "请稍后重试",
+            description: message,
           })
         }
       } else {
@@ -644,7 +704,17 @@ export default function HomePage() {
         }
       }
     },
-    [sessionId, analysisRawPayload, buildRawDataPayload, convertToDiagnosticReport, fileType, handleAnalyze]
+    [
+      sessionId,
+      currentRevision,
+      currentImageFingerprint,
+      currentPreviewBlob,
+      analysisRawPayload,
+      buildRawDataPayload,
+      convertToDiagnosticReport,
+      fileType,
+      handleAnalyze,
+    ]
   )
 
   const hasAnalysis = diagnostics !== null

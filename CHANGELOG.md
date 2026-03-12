@@ -4,6 +4,25 @@
 
 ---
 
+## [0.1.5] — 2026-03-12
+
+### Added（新增）
+- 新增共享 Redis 基础设施：`backend/src/services/redis.ts` 统一提供 lazy-connect 单例 client，并集中记录连接错误。
+- 新增会话契约测试与路由合同测试，覆盖 `image_fingerprint`、`revision`、409 冲突、请求级图片清理与 XMP 无状态导出。
+- 新增请求级视觉资源准备层：`vision-source.ts` + `visionPreviewFiles.ts` 支持 provider 需要公网 URL 时的临时预览图创建与主动清理。
+
+### Changed（变更）
+- Session 架构重构为“只保存业务上下文，不保存图片本体”：Redis 中仅保留 `imageFingerprint`、`revision`、`intentHistory`、参数与报告，不再持久化 base64、文件路径或临时 URL。
+- `/api/analyze` 现在要求前端显式提交 `image_fingerprint`，并在成功响应中返回 `revision`。
+- `/api/refine` 改为 `multipart/form-data` 契约，校验 `session_id + revision + image_fingerprint`，前端会静默重发当前预览图用于同图多轮微调。
+- `/api/xmp` 明确为无状态导出接口，允许携带可选 `session_id/revision` 元数据，但不会修改会话。
+- Redis 限流升级为共享 fixed-window 实现；Redis 异常时采取 `fail-open` 并返回 degraded 决策，而不是直接阻断请求。
+
+### Fixed（修复）
+- 修复模块导入即创建 Redis 连接导致测试进程悬挂的问题，默认 Redis 依赖改为按需解析。
+- 修复 refine 并发/跨图场景缺少版本与图片一致性校验的问题，现在会返回明确的 `409 revision conflict` 或 `409 fingerprint mismatch`。
+- 修复请求级临时视觉图片未在请求结束后立即清理的问题，`finally` 中主动删除，仅保留 TTL 清理作为兜底。
+
 ## [0.1.4] — 2026-03-04
 
 ### Added（新增）

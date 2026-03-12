@@ -81,6 +81,15 @@ const PARAM_BOUNDS: Record<string, [number, number]> = {
     GrainFrequency: [0, 100],
 };
 
+export const KNOWN_TONE_CURVE_KEYS = new Set([
+    'ToneCurvePV2012',
+    'ToneCurvePV2012Red',
+    'ToneCurvePV2012Green',
+    'ToneCurvePV2012Blue',
+]);
+
+export const KNOWN_LIGHTROOM_SCALAR_KEYS = new Set(Object.keys(PARAM_BOUNDS));
+
 /**
  * 所有已知参数的默认值（未被 AI 修改时填入 XMP 模板的值）
  */
@@ -157,7 +166,7 @@ export function clampLightroomParams(
 
     for (const [key, value] of Object.entries(aiParams)) {
         // ToneCurve 为特殊数组类型，不做 clamp
-        if (key.startsWith('ToneCurve') && Array.isArray(value)) {
+        if (isKnownToneCurveKey(key) && Array.isArray(value)) {
             // 校验数组元素都是 0~255 的整数
             result[key] = (value as number[]).map((v) =>
                 Math.max(0, Math.min(255, Math.round(Number(v) || 0)))
@@ -169,13 +178,18 @@ export function clampLightroomParams(
         if (isNaN(numVal)) continue; // 跳过非数字
 
         const bounds = PARAM_BOUNDS[key];
-        if (bounds) {
-            result[key] = Math.max(bounds[0], Math.min(bounds[1], numVal));
-        } else {
-            // 未知参数仍然保留（可能是新版 LR 参数）
-            result[key] = numVal;
-        }
+        if (!bounds) continue;
+
+        result[key] = Math.max(bounds[0], Math.min(bounds[1], numVal));
     }
 
     return result;
+}
+
+export function isKnownLightroomScalarKey(key: string): boolean {
+    return KNOWN_LIGHTROOM_SCALAR_KEYS.has(key);
+}
+
+export function isKnownToneCurveKey(key: string): boolean {
+    return KNOWN_TONE_CURVE_KEYS.has(key);
 }

@@ -1,99 +1,183 @@
-/**
- * session.ts — Redis Session 管理
- *
- * 首次 analyze 时创建 session，缓存图片 URL 和物理数据。
- * 后续 refine 请求只传 session_id + new_intent，后端从 Redis 取缓存数据。
- * TTL 30 分钟，自动过期。
- */
-
-import Redis from 'ioredis';
 import { nanoid } from 'nanoid';
 import type { RawDataForPrompt } from './prompt.js';
+import { getRedisClient, type SharedRedisClient } from './redis.js';
 
 const SESSION_TTL = parseInt(process.env.SESSION_TTL || '1800', 10); // 30min
 
-let redis: Redis | null = null;
-
-function getRedis(): Redis {
-    if (!redis) {
-        const url = process.env.REDIS_URL || 'redis://127.0.0.1:6379';
-        redis = new Redis(url, {
-            maxRetriesPerRequest: 3,
-            lazyConnect: true,
-        });
-        redis.on('error', (err) => {
-            console.error('[Redis Error]', err.message);
-        });
-    }
-    return redis;
-}
-
 export interface SessionData {
-    /** 预览图 Base64（首轮传入，后续复用，不重传） */
-    previewImageBase64: string;
-    /** WASM 解析的物理数据 */
     rawData: RawDataForPrompt;
-    /** 上一轮 LLM 输出的调色参数 */
-    lastLrParams: Record<string, number | number[]>;
-    /** 物理数据的一句话摘要（给 Text-only LLM 用） */
     rawDataSummary: string;
-    /** 当前轮次 */
-    round: number;
-    /** 创建时间 */
+    imageFingerprint: string;
+    style: string;
+    lastLrParams: Record<string, number | number[]>;
+    lastReport: Record<string, unknown> | null;
+    revision: number;
+    intentHistory?: string[];
     createdAt: string;
+    updatedAt: string;
 }
+
+export interface CreateSessionInput {
+    rawData: RawDataForPrompt;
+    rawDataSummary: string;
+    imageFingerprint: string;
+    style?: string;
+    lastLrParams: Record<string, number | number[]>;
+    lastReport?: Record<string, unknown> | null;
+    intent?: string;
+    intentHistory?: string[];
+}
+
+export interface UpdateSessionInput {
+    rawDataSummary?: string;
+    style?: string;
+    lastLrParams?: Record<string, number | number[]>;
+    lastReport?: Record<string, unknown> | null;
+    intent?: string;
+    intentHistory?: string[];
+}
+
+export interface SessionMatchInput {
+    revision: number;
+    imageFingerprint: string;
+}
+
+export type SessionMatchResult = 'ok' | 'revision_conflict' | 'fingerprint_mismatch';
+
+export type SessionRedisClient = Pick<SharedRedisClient, 'get' | 'set'>;
 
 const KEY_PREFIX = 'lumina:session:';
+
+function normalizeIntentHistory(input?: string[]): string[] | undefined {
+    if (!input) return undefined;
+
+    const normalized = input
+        .map((intent) => intent.trim())
+        .filter(Boolean);
+
+    return normalized.length > 0 ? normalized : undefined;
+}
+
+function buildSessionData(input: CreateSessionInput, nowIso: string): SessionData {
+    const intentHistory = normalizeIntentHistory(
+        input.intentHistory ?? (input.intent ? [input.intent] : undefined)
+    );
+
+    return {
+        rawData: input.rawData,
+        rawDataSummary: input.rawDataSummary,
+        imageFingerprint: input.imageFingerprint,
+        style: input.style ?? 'auto',
+        lastLrParams: input.lastLrParams,
+        lastReport: input.lastReport ?? null,
+        revision: 1,
+        intentHistory,
+        createdAt: nowIso,
+        updatedAt: nowIso,
+    };
+}
+
+function buildUpdatedSession(existing: SessionData, updates: UpdateSessionInput, nowIso: string): SessionData {
+    const nextIntentHistory = normalizeIntentHistory(
+        updates.intentHistory ??
+            (updates.intent
+                ? [...(existing.intentHistory ?? []), updates.intent]
+                : existing.intentHistory)
+    );
+
+    return {
+        ...existing,
+        rawDataSummary: updates.rawDataSummary ?? existing.rawDataSummary,
+        style: updates.style ?? existing.style,
+        lastLrParams: updates.lastLrParams ?? existing.lastLrParams,
+        lastReport: updates.lastReport ?? existing.lastReport,
+        intentHistory: nextIntentHistory,
+        revision: existing.revision + 1,
+        updatedAt: nowIso,
+    };
+}
+
+function sessionKey(sessionId: string): string {
+    return `${KEY_PREFIX}${sessionId}`;
+}
+
+export function compareSessionRevisionAndFingerprint(
+    session: Pick<SessionData, 'revision' | 'imageFingerprint'>,
+    incoming: SessionMatchInput
+): SessionMatchResult {
+    if (session.imageFingerprint !== incoming.imageFingerprint) {
+        return 'fingerprint_mismatch';
+    }
+
+    if (session.revision !== incoming.revision) {
+        return 'revision_conflict';
+    }
+
+    return 'ok';
+}
+
+export function createSessionService(redisClient?: SessionRedisClient) {
+    const resolveRedisClient = (): SessionRedisClient => redisClient ?? getRedisClient();
+
+    const createSession = async (data: CreateSessionInput): Promise<string> => {
+        const sessionId = `sess_${nanoid(12)}`;
+        const nowIso = new Date().toISOString();
+        const session = buildSessionData(data, nowIso);
+        await resolveRedisClient().set(
+            sessionKey(sessionId),
+            JSON.stringify(session),
+            'EX',
+            SESSION_TTL
+        );
+        return sessionId;
+    };
+
+    const getSession = async (sessionId: string): Promise<SessionData | null> => {
+        const raw = await resolveRedisClient().get(sessionKey(sessionId));
+        if (!raw) return null;
+        return JSON.parse(raw) as SessionData;
+    };
+
+    const updateSession = async (
+        sessionId: string,
+        updates: UpdateSessionInput
+    ): Promise<SessionData | null> => {
+        const existing = await getSession(sessionId);
+        if (!existing) return null;
+
+        const updated = buildUpdatedSession(existing, updates, new Date().toISOString());
+        await resolveRedisClient().set(
+            sessionKey(sessionId),
+            JSON.stringify(updated),
+            'EX',
+            SESSION_TTL
+        );
+        return updated;
+    };
+
+    return {
+        createSession,
+        getSession,
+        updateSession,
+    };
+}
+
+const defaultSessionService = createSessionService();
 
 /**
  * 创建新 Session
  */
-export async function createSession(data: Omit<SessionData, 'round' | 'createdAt'>): Promise<string> {
-    const r = getRedis();
-    const sessionId = `sess_${nanoid(12)}`;
-    const session: SessionData = {
-        ...data,
-        round: 1,
-        createdAt: new Date().toISOString(),
-    };
-    await r.set(
-        KEY_PREFIX + sessionId,
-        JSON.stringify(session),
-        'EX',
-        SESSION_TTL
-    );
-    return sessionId;
-}
+export const createSession = defaultSessionService.createSession;
 
 /**
  * 获取 Session
  */
-export async function getSession(sessionId: string): Promise<SessionData | null> {
-    const r = getRedis();
-    const raw = await r.get(KEY_PREFIX + sessionId);
-    if (!raw) return null;
-    return JSON.parse(raw) as SessionData;
-}
+export const getSession = defaultSessionService.getSession;
 
 /**
  * 更新 Session（微调后保存新参数）
  */
-export async function updateSession(
-    sessionId: string,
-    updates: Partial<Pick<SessionData, 'lastLrParams' | 'round'>>
-): Promise<void> {
-    const r = getRedis();
-    const existing = await getSession(sessionId);
-    if (!existing) return;
-
-    const updated = { ...existing, ...updates };
-    await r.set(
-        KEY_PREFIX + sessionId,
-        JSON.stringify(updated),
-        'EX',
-        SESSION_TTL // 每次更新时续期
-    );
-}
+export const updateSession = defaultSessionService.updateSession;
 
 /**
  * 生成物理数据的简明摘要（给 Text-only 微调 LLM 使用）

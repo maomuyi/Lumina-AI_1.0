@@ -12,10 +12,11 @@
 
 import OpenAI from 'openai';
 import { SYSTEM_PROMPT } from './prompt.js';
+import { providerSupportsChatCompletions } from './vision-source.js';
 
 const openai = new OpenAI({
     apiKey: process.env.OPENAI_API_KEY || '',
-    baseURL: process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1',
+    baseURL: process.env.OPENAI_BASE_URL || 'https://codeproxy.dev/v1',
 });
 const LLM_MAX_OUTPUT_TOKENS = parseInt(process.env.LLM_MAX_OUTPUT_TOKENS || '2048', 10);
 const LLM_PRIMARY_TIMEOUT_MS = parseInt(process.env.LLM_PRIMARY_TIMEOUT_MS || '120000', 10);
@@ -30,6 +31,17 @@ export interface StreamCallbacks {
     /** 发生错误时触发 */
     onError: (error: Error) => void;
 }
+
+interface LlmTestOverrides {
+    streamVisionAnalysis?: (
+        userPrompt: string,
+        previewImageUrl: string,
+        callbacks: StreamCallbacks
+    ) => Promise<void>;
+    streamTextRefine?: (userPrompt: string, callbacks: StreamCallbacks) => Promise<void>;
+}
+
+let llmTestOverrides: LlmTestOverrides | null = null;
 
 function toErrorMessage(err: unknown): string {
     if (err instanceof Error) return err.message;
@@ -57,7 +69,7 @@ function extractResponsesText(response: unknown): string {
 async function streamVisionViaChatCompletions(
     model: string,
     userPrompt: string,
-    previewImageBase64: string,
+    previewImageUrl: string,
     callbacks: StreamCallbacks,
     signal: AbortSignal
 ): Promise<string> {
@@ -74,7 +86,7 @@ async function streamVisionViaChatCompletions(
                     {
                         type: 'image_url',
                         image_url: {
-                            url: `data:image/jpeg;base64,${previewImageBase64}`,
+                            url: previewImageUrl,
                             detail: 'high',
                         },
                     },
@@ -102,7 +114,7 @@ async function streamVisionViaChatCompletions(
 async function completeVisionViaResponses(
     model: string,
     userPrompt: string,
-    previewImageBase64: string,
+    previewImageUrl: string,
     signal: AbortSignal
 ): Promise<string> {
     const response = await openai.responses.create({
@@ -119,7 +131,7 @@ async function completeVisionViaResponses(
                 content: [
                     {
                         type: 'input_image',
-                        image_url: `data:image/jpeg;base64,${previewImageBase64}`,
+                        image_url: previewImageUrl,
                     },
                     {
                         type: 'input_text',
@@ -265,20 +277,30 @@ async function runWithFallback(
  */
 export async function streamVisionAnalysis(
     userPrompt: string,
-    previewImageBase64: string,
+    previewImageUrl: string,
     callbacks: StreamCallbacks
 ): Promise<void> {
-    const model = process.env.LLM_VISION_MODEL || 'gpt-5-2025-08-07';
+    if (llmTestOverrides?.streamVisionAnalysis) {
+        return llmTestOverrides.streamVisionAnalysis(userPrompt, previewImageUrl, callbacks);
+    }
+
+    const model = process.env.LLM_VISION_MODEL || 'gpt-5.2';
     const preferResponsesPrimary = /^gpt-5/i.test(model);
+    const supportsChatFallback = providerSupportsChatCompletions(process.env.OPENAI_BASE_URL);
+    const unsupportedVisionChatFallback = async () => {
+        throw new Error('Vision chat.completions fallback is unsupported by the current provider');
+    };
 
     if (preferResponsesPrimary) {
         await runWithFallback(
             async (signal) => {
-                const fullText = await completeVisionViaResponses(model, userPrompt, previewImageBase64, signal);
+                const fullText = await completeVisionViaResponses(model, userPrompt, previewImageUrl, signal);
                 callbacks.onTextChunk(fullText);
                 return fullText;
             },
-            (signal) => streamVisionViaChatCompletions(model, userPrompt, previewImageBase64, callbacks, signal),
+            supportsChatFallback
+                ? (signal) => streamVisionViaChatCompletions(model, userPrompt, previewImageUrl, callbacks, signal)
+                : unsupportedVisionChatFallback,
             callbacks,
             'Vision analysis'
         );
@@ -286,8 +308,10 @@ export async function streamVisionAnalysis(
     }
 
     await runWithFallback(
-        (signal) => streamVisionViaChatCompletions(model, userPrompt, previewImageBase64, callbacks, signal),
-        (signal) => completeVisionViaResponses(model, userPrompt, previewImageBase64, signal),
+        supportsChatFallback
+            ? (signal) => streamVisionViaChatCompletions(model, userPrompt, previewImageUrl, callbacks, signal)
+            : unsupportedVisionChatFallback,
+        (signal) => completeVisionViaResponses(model, userPrompt, previewImageUrl, signal),
         callbacks,
         'Vision analysis'
     );
@@ -300,8 +324,16 @@ export async function streamTextRefine(
     userPrompt: string,
     callbacks: StreamCallbacks
 ): Promise<void> {
-    const model = process.env.LLM_TEXT_MODEL || 'gpt-5-2025-08-07';
+    if (llmTestOverrides?.streamTextRefine) {
+        return llmTestOverrides.streamTextRefine(userPrompt, callbacks);
+    }
+
+    const model = process.env.LLM_TEXT_MODEL || 'gpt-5.2';
     const preferResponsesPrimary = /^gpt-5/i.test(model);
+    const supportsChatFallback = providerSupportsChatCompletions(process.env.OPENAI_BASE_URL);
+    const unsupportedTextChatFallback = async () => {
+        throw new Error('Text chat.completions fallback is unsupported by the current provider');
+    };
 
     if (preferResponsesPrimary) {
         await runWithFallback(
@@ -310,7 +342,9 @@ export async function streamTextRefine(
                 callbacks.onTextChunk(fullText);
                 return fullText;
             },
-            (signal) => streamTextViaChatCompletions(model, userPrompt, callbacks, signal),
+            supportsChatFallback
+                ? (signal) => streamTextViaChatCompletions(model, userPrompt, callbacks, signal)
+                : unsupportedTextChatFallback,
             callbacks,
             'Text refine'
         );
@@ -318,9 +352,15 @@ export async function streamTextRefine(
     }
 
     await runWithFallback(
-        (signal) => streamTextViaChatCompletions(model, userPrompt, callbacks, signal),
+        supportsChatFallback
+            ? (signal) => streamTextViaChatCompletions(model, userPrompt, callbacks, signal)
+            : unsupportedTextChatFallback,
         (signal) => completeTextViaResponses(model, userPrompt, signal),
         callbacks,
         'Text refine'
     );
+}
+
+export function setLlmTestOverrides(overrides: LlmTestOverrides | null): void {
+    llmTestOverrides = overrides;
 }

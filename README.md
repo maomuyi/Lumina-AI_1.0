@@ -2,7 +2,7 @@
 
 > 上传照片，AI 生成专业级 Lightroom 调色预设（.xmp），一键下载导入。
 
-当前版本：`v0.1.4`（2026-03-04）
+当前版本：`v0.1.5`（2026-03-12）
 
 Lumina 通过**前端 WASM 深度解析 RAW 底层物理数据** + **多模态大模型双维推理**，生成精准的 Lightroom 调色参数，并输出专业的"AI 调色诊断报告"。
 
@@ -14,8 +14,15 @@ Lumina 通过**前端 WASM 深度解析 RAW 底层物理数据** + **多模态�
 - **双轨分析**：视觉轨（内嵌预览图 → 多模态大模型识别语义）+ 数据轨（物理特征 JSON → 约束调色参数边界）。
 - **专业诊断报告**：四模块结构化报告（核心结论 → 底层剖析 → 美化建议 → 参数动作），兼顾小白与老手。
 - **XMP 模板引擎**：以 Lightroom 官方导出的预设文件作为唯一标准模板，按参数注入生成 100% 兼容 `.xmp`。
-- **多轮微调**：支持自然语言多轮对话（"肤色再亮一点"、"冷色调"），基于 Redis Session 复用上下文，无需重传图片。
+- **多轮微调**：支持自然语言多轮对话（"肤色再亮一点"、"冷色调"），前端静默重发当前预览图，后端只保留业务上下文，不持久化图片本体。
 - **Lightroom 风格 UI**：填充式滑块、色彩编码 HSL 轨道、紧凑 22px 行高，还原专业调色体验。
+
+### v0.1.5 重点更新
+
+- **Session 架构重构**：Redis Session 仅保存 `image_fingerprint`、`revision`、参数、报告与意图历史；图片字节、临时 URL、文件路径均不再持久化。
+- **微调合同升级**：`/api/refine` 切换为 `multipart/form-data`，前端会静默重发当前图片，后端对 `session_id + revision + image_fingerprint` 做 409 冲突保护。
+- **限流升级**：Analyze / Refine / XMP 全部改为共享 Redis fixed-window 限流，Redis 异常时 `fail-open`，优先保证业务可用性。
+- **XMP 更明确地无状态**：导出只依赖当前参数，可选接收 `session_id/revision` 元数据，但不会修改 Redis Session。
 
 ### v0.1.4 重点更新
 
@@ -58,7 +65,7 @@ Lumina 通过**前端 WASM 深度解析 RAW 底层物理数据** + **多模态�
 │                           │                               │
 │                   ┌───────▼───────┐  ┌────────────────┐  │
 │                   │ OpenAI SDK    │  │ Redis Session  │  │
-│                   │ Vision + Text │  │ TTL 30min      │  │
+│                   │ Vision + Text │  │ 仅业务上下文    │  │
 │                   └───────────────┘  └────────────────┘  │
 └──────────────────────────────────────────────────────────┘
 ```
@@ -98,7 +105,10 @@ Lumina/
 │       ├── services/
 │       │   ├── llm.ts          # OpenAI SDK 双模型调度
 │       │   ├── prompt.ts       # System Prompt + 用户 Prompt
-│       │   ├── session.ts      # Redis Session 管理
+│       │   ├── redis.ts        # 共享 Redis client
+│       │   ├── session.ts      # Session（仅业务上下文，不存图片）
+│       │   ├── vision-source.ts # 视觉输入模式与请求级图片准备
+│       │   ├── visionPreviewFiles.ts # 临时视觉预览图写入/清理
 │       │   └── xmp.ts          # XMP 标准模板注入引擎
 │       ├── utils/
 │       │   ├── parseAI.ts      # 三层 JSON 解析防御
@@ -165,15 +175,26 @@ bash build.sh
 | 变量 | 说明 | 默认值 |
 |------|------|--------|
 | `OPENAI_API_KEY` | LLM API Key | — |
-| `OPENAI_BASE_URL` | API 代理地址 | `https://openai.linktre.cc/v1` |
-| `LLM_VISION_MODEL` | 首轮视觉模型 | `gpt-5-2025-08-07` |
-| `LLM_TEXT_MODEL` | 多轮文本模型 | `gpt-5-2025-08-07` |
+| `OPENAI_BASE_URL` | API 代理地址 | `https://codeproxy.dev/v1` |
+| `LLM_VISION_MODEL` | 首轮视觉模型 | `gpt-5.2` |
+| `LLM_TEXT_MODEL` | 多轮文本模型 | `gpt-5.2` |
+| `LLM_VISION_INPUT_MODE` | 视觉图片输入模式（`auto` / `data_url` / `public_url`） | `auto` |
 | `REDIS_URL` | Redis 连接地址 | `redis://127.0.0.1:6379` |
 | `SESSION_TTL` | Session 过期时间（秒） | `1800` |
+| `VISION_PREVIEW_TTL_SECONDS` | 临时视觉预览图保留时间（秒） | `900` |
 | `XMP_FILE_TTL_SECONDS` | XMP 文件有效期（秒） | `86400` |
+| `ANALYZE_RATE_LIMIT_MAX` | Analyze 单 IP 窗口限额 | `12` |
+| `ANALYZE_RATE_LIMIT_WINDOW_SECONDS` | Analyze 限流窗口（秒） | `300` |
+| `REFINE_RATE_LIMIT_MAX` | Refine 单 IP 窗口限额 | `40` |
+| `REFINE_RATE_LIMIT_WINDOW_SECONDS` | Refine 限流窗口（秒） | `300` |
+| `XMP_RATE_LIMIT_MAX` | XMP 单 IP 窗口限额 | `60` |
+| `XMP_RATE_LIMIT_WINDOW_SECONDS` | XMP 限流窗口（秒） | `300` |
+| `PUBLIC_API_BASE_URL` | 视觉 provider 需要公网图片 URL 时使用的后端公网基础地址 | — |
 | `CORS_ORIGINS` | 允许跨域来源（逗号分隔，支持 `*`） | `http://localhost:*,http://127.0.0.1:*` |
 | `PORT` | 后端端口 | `3001` |
 | `NEXT_PUBLIC_API_URL` | 前端连接后端地址 | `http://localhost:3001` |
+
+> 注意：如果你使用的视觉 provider 不接受 `data:image/...;base64,...`，而是要求公网图片 URL，那么本地 `localhost` 环境本身并不足够。此时需要配置 `PUBLIC_API_BASE_URL` 为一个 provider 可访问的公网域名，或者切换到支持 data URL 的视觉 provider。
 
 ---
 
@@ -181,26 +202,40 @@ bash build.sh
 
 ### `POST /api/analyze`
 
-首次分析（SSE 流式响应）。
+首次分析并创建 session（SSE 流式响应）。
 
 - **Content-Type**: `multipart/form-data`
-- **字段**: `preview_image`(File), `raw_data`(JSON), `user_intent`(string), `style`(string)
-- **SSE 事件**: `{type:"text", content}` → `{type:"final", session_id, diagnostic_report, lightroom_params, download_url}`
+- **字段**:
+  - `preview_image`(File)
+  - `raw_data`(JSON)
+  - `user_intent`(string)
+  - `style`(string)
+  - `image_fingerprint`(string, 前端基于当前预览图计算)
+- **Final 事件**: `{ type:"final", session_id, revision, diagnostic_report, lightroom_params, download_url }`
 
 ### `POST /api/refine`
 
-多轮微调（SSE 流式响应）。
+基于同一张图继续微调（SSE 流式响应）。
 
-- **Content-Type**: `application/json`
-- **Body**: `{session_id, new_intent}`
-- **SSE 事件**: 同上
+- **Content-Type**: `multipart/form-data`
+- **字段**:
+  - `session_id`
+  - `revision`
+  - `image_fingerprint`
+  - `new_intent`
+  - `preview_image`(前端静默重发当前图)
+  - `raw_data`(可选)
+- **错误语义**:
+  - `404`: session 不存在或过期
+  - `409`: `revision` 冲突或 `image_fingerprint` 不匹配
+  - `422`: 当前 provider 需要视觉输入，但请求级图片准备失败
 
 ### `POST /api/xmp`
 
-基于当前参数生成新的 XMP 下载链接。
+基于当前参数生成新的 XMP 下载链接，保持无状态。
 
 - **Content-Type**: `application/json`
-- **Body**: `{ lightroom_params }`
+- **Body**: `{ lightroom_params, session_id?, revision? }`
 - **响应**: `{ download_url }`
 
 ### `GET /downloads/:filename`

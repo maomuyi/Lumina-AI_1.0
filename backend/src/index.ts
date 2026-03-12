@@ -18,6 +18,12 @@ import { xmpRoutes } from './routes/xmp.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { cleanupExpiredXmpFiles, ensureXmpDir, XMP_DIR, XMP_FILE_TTL_SECONDS } from './services/xmpFiles.js';
+import {
+    cleanupExpiredVisionPreviewFiles,
+    ensureVisionPreviewDir,
+    VISION_PREVIEW_DIR,
+    VISION_PREVIEW_TTL_SECONDS,
+} from './services/visionPreviewFiles.js';
 
 const PORT = parseInt(process.env.PORT || '3001', 10);
 const HOST = process.env.HOST || '0.0.0.0';
@@ -86,6 +92,12 @@ async function main() {
         credentials: true,
     });
 
+    fastify.addHook('onSend', async (_request, reply, payload) => {
+        reply.header('X-Content-Type-Options', 'nosniff');
+        reply.header('Referrer-Policy', 'no-referrer');
+        return payload;
+    });
+
     // ── Multipart 支持（用于上传预览图） ────────────────────────────────
     await fastify.register(multipart, {
         limits: {
@@ -98,7 +110,7 @@ async function main() {
     fastify.get('/health', async () => ({
         status: 'ok',
         timestamp: new Date().toISOString(),
-        version: '0.1.4',
+        version: '0.1.5',
     }));
 
     // ── 注册业务路由 ────────────────────────────────────────────────────
@@ -109,6 +121,7 @@ async function main() {
     // ── XMP 文件静态下载服务 ─────────────────────────────────────────────
     // MVP 阶段用本地 tmp 目录，后续切 OSS
     ensureXmpDir();
+    ensureVisionPreviewDir();
 
     fastify.get<{ Params: { filename: string } }>(
         '/downloads/:filename',
@@ -132,6 +145,26 @@ async function main() {
         }
     );
 
+    fastify.get<{ Params: { filename: string } }>(
+        '/uploads/vision/:filename',
+        async (request, reply) => {
+            const { filename } = request.params;
+            if (!/^vision_[A-Za-z0-9_-]{10}\.jpg$/.test(filename)) {
+                return reply.status(400).send({ error: 'Invalid filename' });
+            }
+
+            const filePath = path.join(VISION_PREVIEW_DIR, filename);
+            if (!fs.existsSync(filePath)) {
+                return reply.status(404).send({ error: 'File not found or expired' });
+            }
+
+            return reply
+                .header('Content-Type', 'image/jpeg')
+                .header('Cache-Control', 'private, max-age=60')
+                .send(fs.createReadStream(filePath));
+        }
+    );
+
     // ── XMP 清理定时任务（默认 24h TTL）────────────────────────────────
     const cleanupEverySeconds = Math.max(300, Math.floor(XMP_FILE_TTL_SECONDS / 2));
     const runCleanup = () => {
@@ -146,19 +179,32 @@ async function main() {
     runCleanup();
     setInterval(runCleanup, cleanupEverySeconds * 1000).unref();
 
+    const cleanupVisionPreviewEverySeconds = Math.max(120, Math.floor(VISION_PREVIEW_TTL_SECONDS / 2));
+    const runVisionPreviewCleanup = () => {
+        const { scanned, removed } = cleanupExpiredVisionPreviewFiles();
+        if (removed > 0) {
+            fastify.log.info(
+                `[vision-preview-cleanup] removed ${removed} files (scanned=${scanned}, ttl=${VISION_PREVIEW_TTL_SECONDS}s)`
+            );
+        }
+    };
+
+    runVisionPreviewCleanup();
+    setInterval(runVisionPreviewCleanup, cleanupVisionPreviewEverySeconds * 1000).unref();
+
     // ── 启动服务器 ─────────────────────────────────────────────────────
     try {
         await fastify.listen({ port: PORT, host: HOST });
         console.log(`
 ╔══════════════════════════════════════════════════╗
-║  🎨 Lumina Backend v0.1.4                        ║
+║  🎨 Lumina Backend v0.1.5                        ║
 ║                                                  ║
 ║  API:    http://${HOST}:${PORT}                   ║
 ║  Health: http://${HOST}:${PORT}/health            ║
 ║                                                  ║
 ║  Routes:                                         ║
 ║    POST /api/analyze   (SSE, multipart)          ║
-║    POST /api/refine    (SSE, JSON)               ║
+║    POST /api/refine    (SSE, multipart)          ║
 ║    POST /api/xmp       (JSON)                    ║
 ║    GET  /downloads/:id (XMP download)            ║
 ╚══════════════════════════════════════════════════╝
