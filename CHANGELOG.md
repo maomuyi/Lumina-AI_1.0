@@ -4,6 +4,16 @@
 
 ---
 
+## [0.1.6] — 2026-03-13
+
+### Changed（变更）
+- 将当前发布版本提升到 `v0.1.6`（frontend/backend package version、后端健康检查版本字段、启动 Banner、README 当前版本）。
+- 清理未引用的重复与占位文件：移除 `frontend/components/ui/use-toast.ts` 以及 5 个未使用的 placeholder 静态资源。
+- 清理本地可重建产物目录：移除 `.next`、WASM build 目录、`backend/dist` 与 `backend/tmp`，保持工作区更接近源码状态。
+
+### Notes（说明）
+- `third_party/emsdk` 与历史 PDF 文档仍然保留；它们属于后续可选清理项，不包含在本次 release 变更中。
+
 ## [0.1.5] — 2026-03-12
 
 ### Added（新增）
