@@ -6,7 +6,7 @@ import {
     validatePublicBaseUrl,
 } from './vision-source.js';
 
-test('codeproxy defaults to public_url transport', () => {
+test('codeproxy defaults to data_url transport', () => {
     const resolved = resolveVisionImageSource({
         configuredMode: 'auto',
         baseUrl: 'https://codeproxy.dev/v1',
@@ -15,8 +15,8 @@ test('codeproxy defaults to public_url transport', () => {
     });
 
     assert.deepEqual(resolved, {
-        mode: 'public_url',
-        imageUrl: 'https://demo.lumina.app/uploads/vision/foo.jpg',
+        mode: 'data_url',
+        imageUrl: 'data:image/jpeg;base64,abcd',
     });
 });
 
@@ -39,7 +39,7 @@ test('validatePublicBaseUrl rejects localhost and private hosts for public_url m
     assert.equal(validatePublicBaseUrl('https://lumina.example.com'), 'https://lumina.example.com');
 });
 
-test('request-scoped public preview creation returns a cleanup handle', async () => {
+test('codeproxy does not create request-scoped public previews', async () => {
     const cleanupCalls: string[] = [];
     const prepared = prepareVisionImageSource({
         configuredMode: 'auto',
@@ -61,13 +61,13 @@ test('request-scoped public preview creation returns a cleanup handle', async ()
     assert.deepEqual(
         { mode: prepared.mode, imageUrl: prepared.imageUrl },
         {
-            mode: 'public_url',
-            imageUrl: 'https://lumina.example.com/uploads/vision/test.jpg',
+            mode: 'data_url',
+            imageUrl: `data:image/jpeg;base64,${Buffer.from('preview-binary').toString('base64')}`,
         }
     );
 
     await prepared.cleanup();
-    assert.deepEqual(cleanupCalls, ['cleaned']);
+    assert.deepEqual(cleanupCalls, []);
 });
 
 test('public url mode still rejects invalid PUBLIC_API_BASE_URL values', () => {

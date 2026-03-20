@@ -125,6 +125,13 @@ export async function analyzeRoutes(fastify: FastifyInstance) {
             });
         }
 
+        const serverFingerprint = createHash('sha256').update(previewImageBuffer).digest('hex');
+        if (serverFingerprint !== imageFingerprint) {
+            return reply.status(400).send({
+                error: 'image_fingerprint does not match preview_image',
+            });
+        }
+
         let preparedVisionSource: PreparedVisionImageSource | null = null;
         try {
             preparedVisionSource = prepareVisionImageSource({
@@ -171,13 +178,6 @@ export async function analyzeRoutes(fastify: FastifyInstance) {
 
         const userPrompt = buildFirstRoundPrompt(rawData, userIntent, style);
         sendProgress(18, 'prompt_ready', '数据轨准备完成，正在组织分析提示...');
-
-        const serverFingerprint = createHash('sha256').update(previewImageBuffer).digest('hex');
-        if (serverFingerprint !== imageFingerprint) {
-            return reply.status(400).send({
-                error: 'image_fingerprint does not match preview_image',
-            });
-        }
 
         try {
             await new Promise<void>((resolve) => {

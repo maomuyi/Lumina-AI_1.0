@@ -182,6 +182,7 @@ bash build.sh
 |------|------|--------|
 | `OPENAI_API_KEY` | LLM API Key | — |
 | `OPENAI_BASE_URL` | API 代理地址 | `https://codeproxy.dev/v1` |
+| `LLM_PROVIDER` | 手动指定 provider 策略（`dashscope` / `codeproxy` / `generic`），留空则按 `OPENAI_BASE_URL` 自动识别 | 自动识别 |
 | `LLM_VISION_MODEL` | 首轮视觉模型 | `gpt-5.2` |
 | `LLM_TEXT_MODEL` | 多轮文本模型 | `gpt-5.2` |
 | `LLM_VISION_INPUT_MODE` | 视觉图片输入模式（`auto` / `data_url` / `public_url`） | `auto` |
@@ -201,6 +202,8 @@ bash build.sh
 | `NEXT_PUBLIC_API_URL` | 前端连接后端地址 | `http://localhost:3001` |
 
 > 注意：如果你使用的视觉 provider 不接受 `data:image/...;base64,...`，而是要求公网图片 URL，那么本地 `localhost` 环境本身并不足够。此时需要配置 `PUBLIC_API_BASE_URL` 为一个 provider 可访问的公网域名，或者切换到支持 data URL 的视觉 provider。
+>
+> DashScope 兼容模式下，后端会默认将首轮视觉模型回退为 `qwen-vl-plus`（若你未显式设置 `LLM_VISION_MODEL`），便于直接跑通视觉分析。
 
 ---
 

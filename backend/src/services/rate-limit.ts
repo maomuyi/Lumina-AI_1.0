@@ -22,7 +22,18 @@ export interface RateLimitDecision {
 }
 
 export type RateLimitRedisClient = Pick<SharedRedisClient, 'incr' | 'expire'> &
-    Partial<Pick<SharedRedisClient, 'ttl'>>;
+    Partial<Pick<SharedRedisClient, 'ttl' | 'eval'>>;
+
+const FIXED_WINDOW_HIT_SCRIPT = `
+local key = KEYS[1]
+local window = tonumber(ARGV[1])
+local count = redis.call('INCR', key)
+if count == 1 then
+  redis.call('EXPIRE', key, window)
+end
+local ttl = redis.call('TTL', key)
+return { count, ttl }
+`;
 
 export function createMemoryRateLimitStore(): RateLimitStore {
     const windows = new Map<string, WindowState>();
@@ -51,18 +62,37 @@ export function createRedisRateLimitStore(redisClient?: RateLimitRedisClient): R
             const client = redisClient ?? getRedisClient();
 
             try {
-                const count = await client.incr(key);
-                if (count === 1) {
-                    await client.expire(key, windowSeconds);
-                    return {
-                        count,
-                        resetAt: nowMs + windowSeconds * 1000,
-                        degraded: false,
-                    };
+                let count = 0;
+                let ttlSeconds = -1;
+
+                if (typeof client.eval === 'function') {
+                    const result = await client.eval(FIXED_WINDOW_HIT_SCRIPT, 1, key, windowSeconds);
+                    if (
+                        Array.isArray(result) &&
+                        result.length >= 2 &&
+                        Number.isFinite(Number(result[0])) &&
+                        Number.isFinite(Number(result[1]))
+                    ) {
+                        count = Number(result[0]);
+                        ttlSeconds = Number(result[1]);
+                    } else {
+                        throw new Error('Unexpected redis eval result shape');
+                    }
+                } else {
+                    count = await client.incr(key);
+                    if (count === 1) {
+                        await client.expire(key, windowSeconds);
+                        ttlSeconds = windowSeconds;
+                    } else {
+                        ttlSeconds = typeof client.ttl === 'function' ? await client.ttl(key) : -1;
+                    }
                 }
 
-                const ttlSeconds =
-                    typeof client.ttl === 'function' ? await client.ttl(key) : -1;
+                if (ttlSeconds <= 0) {
+                    await client.expire(key, windowSeconds);
+                    ttlSeconds = windowSeconds;
+                }
+
                 const retryAfterSeconds = ttlSeconds > 0 ? ttlSeconds : windowSeconds;
 
                 return {

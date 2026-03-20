@@ -44,9 +44,26 @@ export interface SessionMatchInput {
 
 export type SessionMatchResult = 'ok' | 'revision_conflict' | 'fingerprint_mismatch';
 
-export type SessionRedisClient = Pick<SharedRedisClient, 'get' | 'set'>;
+export type SessionRedisClient = Pick<SharedRedisClient, 'get' | 'set'> &
+    Partial<Pick<SharedRedisClient, 'eval'>>;
 
 const KEY_PREFIX = 'lumina:session:';
+const CAS_SET_BY_REVISION_SCRIPT = `
+local key = KEYS[1]
+local expectedRevision = tonumber(ARGV[1])
+local ttl = tonumber(ARGV[2])
+local nextPayload = ARGV[3]
+local raw = redis.call('GET', key)
+if not raw then
+  return nil
+end
+local current = cjson.decode(raw)
+if tonumber(current.revision) ~= expectedRevision then
+  return nil
+end
+redis.call('SET', key, nextPayload, 'EX', ttl)
+return nextPayload
+`;
 
 function normalizeIntentHistory(input?: string[]): string[] | undefined {
     if (!input) return undefined;
@@ -142,16 +159,31 @@ export function createSessionService(redisClient?: SessionRedisClient) {
         sessionId: string,
         updates: UpdateSessionInput
     ): Promise<SessionData | null> => {
-        const existing = await getSession(sessionId);
+        const client = resolveRedisClient();
+        const key = sessionKey(sessionId);
+        const existingRaw = await client.get(key);
+        if (!existingRaw) return null;
+        const existing = JSON.parse(existingRaw) as SessionData;
         if (!existing) return null;
 
         const updated = buildUpdatedSession(existing, updates, new Date().toISOString());
-        await resolveRedisClient().set(
-            sessionKey(sessionId),
-            JSON.stringify(updated),
-            'EX',
-            SESSION_TTL
-        );
+
+        if (typeof client.eval === 'function') {
+            const result = await client.eval(
+                CAS_SET_BY_REVISION_SCRIPT,
+                1,
+                key,
+                existing.revision,
+                SESSION_TTL,
+                JSON.stringify(updated)
+            );
+            if (!result) {
+                return null;
+            }
+            return updated;
+        }
+
+        await client.set(key, JSON.stringify(updated), 'EX', SESSION_TTL);
         return updated;
     };
 

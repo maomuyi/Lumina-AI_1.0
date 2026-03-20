@@ -24,54 +24,12 @@ import {
     VISION_PREVIEW_DIR,
     VISION_PREVIEW_TTL_SECONDS,
 } from './services/visionPreviewFiles.js';
+import { createCorsOriginMatcher } from './services/cors.js';
 
 const PORT = parseInt(process.env.PORT || '3001', 10);
 const HOST = process.env.HOST || '0.0.0.0';
 const ANALYZE_MAX_FILE_SIZE_MB = parseInt(process.env.ANALYZE_MAX_FILE_SIZE_MB || '50', 10);
 const ANALYZE_MAX_FILE_SIZE_BYTES = Math.max(1, ANALYZE_MAX_FILE_SIZE_MB) * 1024 * 1024;
-const DEFAULT_CORS_ORIGINS = ['http://localhost:*', 'http://127.0.0.1:*'];
-
-function escapeRegExp(input: string): string {
-    return input.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
-function parseCorsOrigins(): string[] {
-    const raw = process.env.CORS_ORIGINS;
-    if (!raw) return DEFAULT_CORS_ORIGINS;
-    const parsed = raw
-        .split(',')
-        .map((item) => item.trim())
-        .filter(Boolean);
-    return parsed.length > 0 ? parsed : DEFAULT_CORS_ORIGINS;
-}
-
-function compileOriginPattern(pattern: string): RegExp {
-    const regex = `^${escapeRegExp(pattern).replace(/\\\*/g, '.*')}$`;
-    return new RegExp(regex);
-}
-
-function buildCorsOriginMatcher() {
-    const patterns = parseCorsOrigins();
-    const matchers = patterns.map(compileOriginPattern);
-    // 兼容 *.vercel.app（保留原规则）
-    const vercelMatcher = /^https?:\/\/([a-zA-Z0-9-]+\.)*vercel\.app(?::\d+)?$/;
-
-    return (origin: string | undefined, cb: (err: Error | null, allow: boolean) => void) => {
-        if (!origin) {
-            cb(null, true);
-            return;
-        }
-
-        const matchedByPattern = matchers.some((matcher) => matcher.test(origin));
-        if (matchedByPattern || vercelMatcher.test(origin)) {
-            cb(null, true);
-            return;
-        }
-
-        cb(new Error('CORS origin denied'), false);
-    };
-}
-
 async function main() {
     const fastify = Fastify({
         logger: {
@@ -87,7 +45,7 @@ async function main() {
 
     // ── CORS（允许前端 localhost:3000 跨域） ────────────────────────────
     await fastify.register(cors, {
-        origin: buildCorsOriginMatcher(),
+        origin: createCorsOriginMatcher(),
         methods: ['GET', 'POST', 'OPTIONS'],
         credentials: true,
     });

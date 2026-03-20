@@ -131,3 +131,36 @@ test('session helper distinguishes revision conflicts from fingerprint mismatche
         'fingerprint_mismatch'
     );
 });
+
+test('session update fails when redis CAS detects stale revision', async () => {
+    const store = new Map<string, string>();
+    const client = {
+        async get(key: string) {
+            return store.get(key) ?? null;
+        },
+        async set(key: string, value: string) {
+            store.set(key, value);
+            return 'OK';
+        },
+        async eval() {
+            return null;
+        },
+    };
+
+    const sessions = createSessionService(client as never);
+    const sessionId = await sessions.createSession({
+        rawData: buildRawData(),
+        rawDataSummary: 'summary',
+        imageFingerprint: 'fingerprint-1',
+        style: 'auto',
+        lastLrParams: { Exposure2012: 0.25 },
+        lastReport: { module_1_diagnosis: 'balanced' },
+    });
+
+    const result = await sessions.updateSession(sessionId, {
+        lastLrParams: { Exposure2012: 0.3 },
+        intent: 'new intent',
+    });
+
+    assert.equal(result, null);
+});

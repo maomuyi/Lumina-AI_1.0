@@ -12,16 +12,28 @@
 
 import OpenAI from 'openai';
 import { SYSTEM_PROMPT } from './prompt.js';
-import { providerSupportsChatCompletions } from './vision-source.js';
+import { resolveLlmProviderConfig } from './llm-provider.js';
 
-const openai = new OpenAI({
-    apiKey: process.env.OPENAI_API_KEY || '',
-    baseURL: process.env.OPENAI_BASE_URL || 'https://codeproxy.dev/v1',
-});
 const LLM_MAX_OUTPUT_TOKENS = parseInt(process.env.LLM_MAX_OUTPUT_TOKENS || '2048', 10);
 const LLM_PRIMARY_TIMEOUT_MS = parseInt(process.env.LLM_PRIMARY_TIMEOUT_MS || '120000', 10);
 const LLM_FALLBACK_TIMEOUT_MS = parseInt(process.env.LLM_FALLBACK_TIMEOUT_MS || '90000', 10);
 const LLM_PRIMARY_RETRY_COUNT = Math.max(0, parseInt(process.env.LLM_PRIMARY_RETRY_COUNT || '1', 10));
+let cachedClient: OpenAI | null = null;
+let cachedClientKey = '';
+
+function getOpenAIClient(): OpenAI {
+    const config = resolveLlmProviderConfig();
+    const nextClientKey = `${config.baseUrl}::${config.apiKey}`;
+    if (cachedClient && cachedClientKey === nextClientKey) {
+        return cachedClient;
+    }
+    cachedClient = new OpenAI({
+        apiKey: config.apiKey,
+        baseURL: config.baseUrl,
+    });
+    cachedClientKey = nextClientKey;
+    return cachedClient;
+}
 
 export interface StreamCallbacks {
     /** 每收到一个文本 chunk 时触发（用于 SSE 推送给前端） */
@@ -54,26 +66,32 @@ function extractResponsesText(response: unknown): string {
         output?: Array<{ content?: Array<{ text?: string }> }>;
     };
 
+    if (!Array.isArray(r.output)) return '';
+    const contentText = r.output
+        .flatMap((item) => (Array.isArray(item.content) ? item.content : []))
+        .map((part) => (typeof part.text === 'string' ? part.text : ''))
+        .join('');
+
+    if (contentText.trim()) {
+        return contentText;
+    }
+
     if (typeof r.output_text === 'string' && r.output_text.trim()) {
         return r.output_text;
     }
 
-    if (!Array.isArray(r.output)) return '';
-
-    return r.output
-        .flatMap((item) => (Array.isArray(item.content) ? item.content : []))
-        .map((part) => (typeof part.text === 'string' ? part.text : ''))
-        .join('');
+    return '';
 }
 
 async function streamVisionViaChatCompletions(
+    client: OpenAI,
     model: string,
     userPrompt: string,
     previewImageUrl: string,
     callbacks: StreamCallbacks,
     signal: AbortSignal
 ): Promise<string> {
-    const stream = await openai.chat.completions.create({
+    const stream = await client.chat.completions.create({
         model,
         stream: true,
         max_tokens: LLM_MAX_OUTPUT_TOKENS,
@@ -112,12 +130,13 @@ async function streamVisionViaChatCompletions(
 }
 
 async function completeVisionViaResponses(
+    client: OpenAI,
     model: string,
     userPrompt: string,
     previewImageUrl: string,
     signal: AbortSignal
 ): Promise<string> {
-    const response = await openai.responses.create({
+    const response = await client.responses.create({
         model,
         temperature: 0.3,
         max_output_tokens: LLM_MAX_OUTPUT_TOKENS,
@@ -150,12 +169,13 @@ async function completeVisionViaResponses(
 }
 
 async function streamTextViaChatCompletions(
+    client: OpenAI,
     model: string,
     userPrompt: string,
     callbacks: StreamCallbacks,
     signal: AbortSignal
 ): Promise<string> {
-    const stream = await openai.chat.completions.create({
+    const stream = await client.chat.completions.create({
         model,
         stream: true,
         max_tokens: LLM_MAX_OUTPUT_TOKENS,
@@ -182,11 +202,12 @@ async function streamTextViaChatCompletions(
 }
 
 async function completeTextViaResponses(
+    client: OpenAI,
     model: string,
     userPrompt: string,
     signal: AbortSignal
 ): Promise<string> {
-    const response = await openai.responses.create({
+    const response = await client.responses.create({
         model,
         temperature: 0.3,
         max_output_tokens: LLM_MAX_OUTPUT_TOKENS,
@@ -284,9 +305,11 @@ export async function streamVisionAnalysis(
         return llmTestOverrides.streamVisionAnalysis(userPrompt, previewImageUrl, callbacks);
     }
 
-    const model = process.env.LLM_VISION_MODEL || 'gpt-5.2';
-    const preferResponsesPrimary = /^gpt-5/i.test(model);
-    const supportsChatFallback = providerSupportsChatCompletions(process.env.OPENAI_BASE_URL);
+    const client = getOpenAIClient();
+    const providerConfig = resolveLlmProviderConfig();
+    const model = providerConfig.visionModel;
+    const preferResponsesPrimary = providerConfig.preferResponsesPrimaryForVision;
+    const supportsChatFallback = providerConfig.supportsChatCompletions;
     const unsupportedVisionChatFallback = async () => {
         throw new Error('Vision chat.completions fallback is unsupported by the current provider');
     };
@@ -294,12 +317,26 @@ export async function streamVisionAnalysis(
     if (preferResponsesPrimary) {
         await runWithFallback(
             async (signal) => {
-                const fullText = await completeVisionViaResponses(model, userPrompt, previewImageUrl, signal);
+                const fullText = await completeVisionViaResponses(
+                    client,
+                    model,
+                    userPrompt,
+                    previewImageUrl,
+                    signal
+                );
                 callbacks.onTextChunk(fullText);
                 return fullText;
             },
             supportsChatFallback
-                ? (signal) => streamVisionViaChatCompletions(model, userPrompt, previewImageUrl, callbacks, signal)
+                ? (signal) =>
+                    streamVisionViaChatCompletions(
+                        client,
+                        model,
+                        userPrompt,
+                        previewImageUrl,
+                        callbacks,
+                        signal
+                    )
                 : unsupportedVisionChatFallback,
             callbacks,
             'Vision analysis'
@@ -309,9 +346,17 @@ export async function streamVisionAnalysis(
 
     await runWithFallback(
         supportsChatFallback
-            ? (signal) => streamVisionViaChatCompletions(model, userPrompt, previewImageUrl, callbacks, signal)
+            ? (signal) =>
+                streamVisionViaChatCompletions(
+                    client,
+                    model,
+                    userPrompt,
+                    previewImageUrl,
+                    callbacks,
+                    signal
+                )
             : unsupportedVisionChatFallback,
-        (signal) => completeVisionViaResponses(model, userPrompt, previewImageUrl, signal),
+        (signal) => completeVisionViaResponses(client, model, userPrompt, previewImageUrl, signal),
         callbacks,
         'Vision analysis'
     );
@@ -328,9 +373,11 @@ export async function streamTextRefine(
         return llmTestOverrides.streamTextRefine(userPrompt, callbacks);
     }
 
-    const model = process.env.LLM_TEXT_MODEL || 'gpt-5.2';
-    const preferResponsesPrimary = /^gpt-5/i.test(model);
-    const supportsChatFallback = providerSupportsChatCompletions(process.env.OPENAI_BASE_URL);
+    const client = getOpenAIClient();
+    const providerConfig = resolveLlmProviderConfig();
+    const model = providerConfig.textModel;
+    const preferResponsesPrimary = providerConfig.preferResponsesPrimaryForText;
+    const supportsChatFallback = providerConfig.supportsChatCompletions;
     const unsupportedTextChatFallback = async () => {
         throw new Error('Text chat.completions fallback is unsupported by the current provider');
     };
@@ -338,12 +385,13 @@ export async function streamTextRefine(
     if (preferResponsesPrimary) {
         await runWithFallback(
             async (signal) => {
-                const fullText = await completeTextViaResponses(model, userPrompt, signal);
+                const fullText = await completeTextViaResponses(client, model, userPrompt, signal);
                 callbacks.onTextChunk(fullText);
                 return fullText;
             },
             supportsChatFallback
-                ? (signal) => streamTextViaChatCompletions(model, userPrompt, callbacks, signal)
+                ? (signal) =>
+                    streamTextViaChatCompletions(client, model, userPrompt, callbacks, signal)
                 : unsupportedTextChatFallback,
             callbacks,
             'Text refine'
@@ -353,9 +401,9 @@ export async function streamTextRefine(
 
     await runWithFallback(
         supportsChatFallback
-            ? (signal) => streamTextViaChatCompletions(model, userPrompt, callbacks, signal)
+            ? (signal) => streamTextViaChatCompletions(client, model, userPrompt, callbacks, signal)
             : unsupportedTextChatFallback,
-        (signal) => completeTextViaResponses(model, userPrompt, signal),
+        (signal) => completeTextViaResponses(client, model, userPrompt, signal),
         callbacks,
         'Text refine'
     );

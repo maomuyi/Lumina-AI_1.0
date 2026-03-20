@@ -6,6 +6,11 @@ export interface SharedRedisClient {
     incr(key: string): Promise<number>;
     expire(key: string, durationSeconds: number): Promise<number>;
     ttl?(key: string): Promise<number>;
+    eval?(
+        script: string,
+        numKeys: number,
+        ...args: Array<string | number>
+    ): Promise<unknown>;
     connect?(): Promise<unknown>;
     on?(event: 'error', listener: (error: Error) => void): unknown;
     status?: string;

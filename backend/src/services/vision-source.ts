@@ -62,11 +62,11 @@ export function getVisionProviderCapabilities(baseUrl?: string): VisionProviderC
 
     if (normalized.includes('codeproxy.dev')) {
         return {
-            supportsDataUrl: false,
-            supportsPublicUrl: true,
+            supportsDataUrl: true,
+            supportsPublicUrl: false,
             supportsChatCompletions: false,
             supportsFileUploadVision: false,
-            preferredMode: 'public_url',
+            preferredMode: 'data_url',
         };
     }
 

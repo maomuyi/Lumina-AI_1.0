@@ -71,3 +71,31 @@ test('rate limiter fails open and reports degraded mode when redis throws', asyn
     assert.equal(decision.remaining, 2);
     assert.equal(decision.retryAfterSeconds, 0);
 });
+
+test('redis rate limit store repairs missing TTL when ttl check returns non-positive', async () => {
+    const calls: Array<{ method: string; args: unknown[] }> = [];
+    const store = createRedisRateLimitStore({
+        async incr(key) {
+            calls.push({ method: 'incr', args: [key] });
+            return 2;
+        },
+        async expire(key, seconds) {
+            calls.push({ method: 'expire', args: [key, seconds] });
+            return 1;
+        },
+        async ttl(key) {
+            calls.push({ method: 'ttl', args: [key] });
+            return -1;
+        },
+    });
+
+    const decision = await hitRateLimit(store, 'analyze', 'ip:127.0.0.1', 3, 60, 1_000);
+
+    assert.equal(decision.allowed, true);
+    assert.equal(decision.degraded, false);
+    assert.deepEqual(calls, [
+        { method: 'incr', args: ['analyze:ip:127.0.0.1'] },
+        { method: 'ttl', args: ['analyze:ip:127.0.0.1'] },
+        { method: 'expire', args: ['analyze:ip:127.0.0.1', 60] },
+    ]);
+});

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { Buffer } from 'node:buffer';
 import { createHash } from 'node:crypto';
+import fs from 'node:fs';
 import test, { afterEach } from 'node:test';
 import Fastify from 'fastify';
 import multipart from '@fastify/multipart';
@@ -9,6 +10,7 @@ import { refineRoutes } from './refine.js';
 import { createSessionService, summarizeRawData, type SessionData } from '../services/session.js';
 import { setLlmTestOverrides } from '../services/llm.js';
 import { setSharedRedisClientForTests, type SharedRedisClient } from '../services/redis.js';
+import { VISION_PREVIEW_DIR } from '../services/visionPreviewFiles.js';
 
 function buildRawData() {
     return {
@@ -197,6 +199,94 @@ test('analyze requires image_fingerprint in multipart fields', async () => {
     await app.close();
 });
 
+test('analyze with codeproxy accepts local image input without PUBLIC_API_BASE_URL', async () => {
+    const redisClient = createFakeRedisClient();
+    setSharedRedisClientForTests(redisClient);
+    process.env.OPENAI_BASE_URL = 'https://codeproxy.dev/v1';
+
+    let receivedPreviewImageUrl = '';
+    setLlmTestOverrides({
+        async streamVisionAnalysis(_prompt, previewImageUrl, callbacks) {
+            receivedPreviewImageUrl = previewImageUrl;
+            callbacks.onComplete(buildMockLlmResponse());
+        },
+    });
+
+    const app = await buildApp();
+    const previewImage = Buffer.from('preview-image');
+    const previewFingerprint = createHash('sha256').update(previewImage).digest('hex');
+    const rawData = JSON.stringify(buildRawData());
+    const request = buildMultipartRequest([
+        {
+            name: 'preview_image',
+            value: previewImage,
+            filename: 'preview.jpg',
+            contentType: 'image/jpeg',
+        },
+        { name: 'raw_data', value: rawData },
+        { name: 'user_intent', value: 'make it cinematic' },
+        { name: 'style', value: 'film' },
+        { name: 'image_fingerprint', value: previewFingerprint },
+    ]);
+
+    const response = await app.inject({
+        method: 'POST',
+        url: '/api/analyze',
+        headers: request.headers,
+        payload: request.payload,
+    });
+
+    assert.equal(response.statusCode, 200);
+    assert.match(receivedPreviewImageUrl, /^data:image\/jpeg;base64,/);
+    assert.match(response.body, /"type":"final"/);
+    assert.match(response.body, /"revision":1/);
+
+    await app.close();
+});
+
+test('analyze rejects mismatched fingerprint before SSE starts and does not leak public preview files', async () => {
+    const redisClient = createFakeRedisClient();
+    setSharedRedisClientForTests(redisClient);
+    process.env.LLM_VISION_INPUT_MODE = 'public_url';
+    process.env.PUBLIC_API_BASE_URL = 'https://lumina.example.com';
+
+    fs.mkdirSync(VISION_PREVIEW_DIR, { recursive: true });
+    const beforeFiles = new Set(fs.readdirSync(VISION_PREVIEW_DIR));
+
+    const app = await buildApp();
+    const previewImage = Buffer.from('preview-image-mismatch');
+    const rawData = JSON.stringify(buildRawData());
+    const request = buildMultipartRequest([
+        {
+            name: 'preview_image',
+            value: previewImage,
+            filename: 'preview.jpg',
+            contentType: 'image/jpeg',
+        },
+        { name: 'raw_data', value: rawData },
+        { name: 'user_intent', value: 'make it cinematic' },
+        { name: 'style', value: 'film' },
+        { name: 'image_fingerprint', value: createHash('sha256').update('another-image').digest('hex') },
+    ]);
+
+    const response = await app.inject({
+        method: 'POST',
+        url: '/api/analyze',
+        headers: request.headers,
+        payload: request.payload,
+    });
+
+    assert.equal(response.statusCode, 400);
+    assert.match(response.headers['content-type'] ?? '', /^application\/json/);
+    assert.match(response.body, /image_fingerprint does not match preview_image/);
+
+    const afterFiles = fs.readdirSync(VISION_PREVIEW_DIR);
+    const leakedFiles = afterFiles.filter((file) => !beforeFiles.has(file));
+    assert.deepEqual(leakedFiles, []);
+
+    await app.close();
+});
+
 test('refine validates session_id, revision, and image_fingerprint before processing', async () => {
     const redisClient = createFakeRedisClient();
     setSharedRedisClientForTests(redisClient);
@@ -275,8 +365,7 @@ test('refine returns 409 on fingerprint mismatch', async () => {
 test('refine accepts the silently resent image and returns the next revision', async () => {
     const redisClient = createFakeRedisClient();
     setSharedRedisClientForTests(redisClient);
-    process.env.LLM_VISION_INPUT_MODE = 'data_url';
-    process.env.OPENAI_BASE_URL = 'https://api.openai.com/v1';
+    process.env.OPENAI_BASE_URL = 'https://codeproxy.dev/v1';
     const previewImage = Buffer.from('preview-image');
     const previewFingerprint = createHash('sha256').update(previewImage).digest('hex');
 

@@ -123,8 +123,12 @@ async function consumeSSEStream(
                             callbacks.onFinal?.(event as SSEFinalEvent);
                         } else if (event.type === 'error') {
                             callbacks.onError?.(event.message);
+                            throw new Error(event.message);
                         }
-                    } catch {
+                    } catch (error) {
+                        if (error instanceof Error && error.message) {
+                            throw error;
+                        }
                         // JSON 解析失败，跳过
                     }
                 }

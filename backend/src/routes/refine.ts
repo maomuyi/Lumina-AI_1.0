@@ -265,12 +265,22 @@ async function runRefineFlow(
                                 lastReport: enrichedReport,
                                 intent: body.new_intent,
                             });
+                            if (!updatedSession) {
+                                sendSSE({
+                                    type: 'error',
+                                    message:
+                                        'Refine revision conflict detected during save. Please refresh and retry.',
+                                });
+                                reply.raw.end();
+                                resolve();
+                                return;
+                            }
 
                             sendProgress(95, 'xmp_ready', '新 XMP 已生成，准备返回结果...');
                             sendSSE({
                                 type: 'final',
                                 session_id: body.session_id,
-                                revision: updatedSession?.revision ?? session.revision + 1,
+                                revision: updatedSession.revision,
                                 diagnostic_report: enrichedReport,
                                 lightroom_params: clamped,
                                 download_url: downloadUrl,
@@ -322,12 +332,22 @@ async function runRefineFlow(
                                 lastReport: enrichedReport,
                                 intent: body.new_intent,
                             });
+                            if (!updatedSession) {
+                                sendSSE({
+                                    type: 'error',
+                                    message:
+                                        'Refine revision conflict detected during save. Please refresh and retry.',
+                                });
+                                reply.raw.end();
+                                resolve();
+                                return;
+                            }
 
                             sendProgress(95, 'xmp_ready', '新 XMP 已生成，准备返回结果...');
                             sendSSE({
                                 type: 'final',
                                 session_id: body.session_id,
-                                revision: updatedSession?.revision ?? session.revision + 1,
+                                revision: updatedSession.revision,
                                 diagnostic_report: enrichedReport,
                                 lightroom_params: clamped,
                                 download_url: downloadUrl,
