@@ -32,3 +32,5 @@ backend/tmp/
 
 # Workspace artifacts
 .pnpm-store/
+.playwright-cli/
+V0.1.0 AI 调色 MVP 版本.pdf
