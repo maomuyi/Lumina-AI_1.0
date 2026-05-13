@@ -34,6 +34,8 @@ export interface ExifData {
     raw_bits: number;
     width: number;
     height: number;
+    raw_width?: number;
+    raw_height?: number;
 }
 
 export interface PhysicsData {
@@ -75,6 +77,12 @@ export interface RawAnalysisResult {
     histogram256: LinearHistogram;
     /** 内嵌预览 JPEG 的 Blob URL（视觉轨） */
     previewObjectUrl: string | null;
+    /** 内嵌预览 JPEG 的实际尺寸，用于判断相机预览是否与 RAW 画幅一致 */
+    previewDimensions: {
+        width: number;
+        height: number;
+        aspectMismatch: boolean;
+    } | null;
 }
 
 // Emscripten 模块类型（最小化声明）
@@ -91,6 +99,136 @@ declare function importScripts(...urls: string[]): void;
 declare function LibRawModule(): Promise<LibRawModuleType>;
 type LibRawModuleFactory = () => Promise<LibRawModuleType>;
 
+type EmbeddedJpegCandidate = {
+    offset: number;
+    length: number;
+    source: string;
+}
+
+const TIFF_TYPE_BYTES: Record<number, number> = {
+    1: 1,  // BYTE
+    2: 1,  // ASCII
+    3: 2,  // SHORT
+    4: 4,  // LONG
+    5: 8,  // RATIONAL
+    7: 1,  // UNDEFINED
+    9: 4,  // SLONG
+    10: 8, // SRATIONAL
+}
+
+const TIFF_TAG_SUB_IFDS = 0x014a;
+const TIFF_TAG_EXIF_IFD = 0x8769;
+const TIFF_TAG_JPEG_OFFSET = 0x0201;
+const TIFF_TAG_JPEG_LENGTH = 0x0202;
+
+function isTiffHeader(view: DataView): { littleEndian: boolean; firstIfdOffset: number } | null {
+    if (view.byteLength < 8) return null;
+    const byteOrder = view.getUint16(0, false);
+    const littleEndian = byteOrder === 0x4949;
+    if (!littleEndian && byteOrder !== 0x4d4d) return null;
+    if (view.getUint16(2, littleEndian) !== 42) return null;
+    return { littleEndian, firstIfdOffset: view.getUint32(4, littleEndian) };
+}
+
+function readTiffEntryValues(view: DataView, entryOffset: number, littleEndian: boolean): number[] {
+    if (entryOffset < 0 || entryOffset + 12 > view.byteLength) return [];
+
+    const type = view.getUint16(entryOffset + 2, littleEndian);
+    const count = view.getUint32(entryOffset + 4, littleEndian);
+    const typeBytes = TIFF_TYPE_BYTES[type] ?? 0;
+    if (!typeBytes || count === 0 || count > 1024) return [];
+
+    const totalBytes = typeBytes * count;
+    const valuesOffset = totalBytes <= 4 ? entryOffset + 8 : view.getUint32(entryOffset + 8, littleEndian);
+    if (valuesOffset < 0 || valuesOffset + totalBytes > view.byteLength) return [];
+
+    const values: number[] = [];
+    for (let i = 0; i < count; i++) {
+        const offset = valuesOffset + i * typeBytes;
+        if (type === 1 || type === 2 || type === 7) {
+            values.push(view.getUint8(offset));
+        } else if (type === 3) {
+            values.push(view.getUint16(offset, littleEndian));
+        } else if (type === 4) {
+            values.push(view.getUint32(offset, littleEndian));
+        } else if (type === 9) {
+            values.push(view.getInt32(offset, littleEndian));
+        }
+    }
+
+    return values;
+}
+
+function hasJpegSignature(bytes: Uint8Array, offset: number, length: number): boolean {
+    return (
+        offset >= 0 &&
+        length > 1024 &&
+        offset + length <= bytes.byteLength &&
+        bytes[offset] === 0xff &&
+        bytes[offset + 1] === 0xd8
+    );
+}
+
+function scanTiffEmbeddedJpegs(bytes: Uint8Array): EmbeddedJpegCandidate[] {
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    const header = isTiffHeader(view);
+    if (!header) return [];
+
+    const candidates = new Map<string, EmbeddedJpegCandidate>();
+    const queue = [header.firstIfdOffset];
+    const visited = new Set<number>();
+
+    while (queue.length > 0 && visited.size < 64) {
+        const ifdOffset = queue.shift();
+        if (ifdOffset === undefined || visited.has(ifdOffset)) continue;
+        visited.add(ifdOffset);
+
+        if (ifdOffset <= 0 || ifdOffset + 2 > view.byteLength) continue;
+        const entryCount = view.getUint16(ifdOffset, header.littleEndian);
+        const entriesStart = ifdOffset + 2;
+        const nextIfdOffsetAt = entriesStart + entryCount * 12;
+        if (entryCount > 512 || nextIfdOffsetAt + 4 > view.byteLength) continue;
+
+        let jpegOffset: number | null = null;
+        let jpegLength: number | null = null;
+
+        for (let i = 0; i < entryCount; i++) {
+            const entryOffset = entriesStart + i * 12;
+            const tag = view.getUint16(entryOffset, header.littleEndian);
+            const values = readTiffEntryValues(view, entryOffset, header.littleEndian);
+
+            if (tag === TIFF_TAG_JPEG_OFFSET && values.length > 0) {
+                jpegOffset = values[0];
+            } else if (tag === TIFF_TAG_JPEG_LENGTH && values.length > 0) {
+                jpegLength = values[0];
+            } else if (tag === TIFF_TAG_SUB_IFDS || tag === TIFF_TAG_EXIF_IFD) {
+                for (const value of values) {
+                    if (value > 0 && value < view.byteLength) queue.push(value);
+                }
+            }
+        }
+
+        if (
+            jpegOffset !== null &&
+            jpegLength !== null &&
+            hasJpegSignature(bytes, jpegOffset, jpegLength)
+        ) {
+            candidates.set(`${jpegOffset}:${jpegLength}`, {
+                offset: jpegOffset,
+                length: jpegLength,
+                source: `IFD@${ifdOffset}`,
+            });
+        }
+
+        const nextIfdOffset = view.getUint32(nextIfdOffsetAt, header.littleEndian);
+        if (nextIfdOffset > 0 && nextIfdOffset < view.byteLength) {
+            queue.push(nextIfdOffset);
+        }
+    }
+
+    return Array.from(candidates.values()).sort((a, b) => b.length - a.length);
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Worker 内部状态
 // ─────────────────────────────────────────────────────────────────────────────
@@ -100,6 +238,42 @@ let moduleFactory: LibRawModuleFactory | null = null;
 /** 发送进度消息给主线程 */
 function progress(stage: string, pct: number) {
     self.postMessage({ type: 'PROGRESS', stage, pct });
+}
+
+async function readPreviewDimensions(
+    blob: Blob,
+    rawWidth: number,
+    rawHeight: number
+): Promise<RawAnalysisResult['previewDimensions']> {
+    try {
+        const bitmap = await createImageBitmap(blob, { imageOrientation: 'from-image' });
+        const width = bitmap.width;
+        const height = bitmap.height;
+        bitmap.close();
+
+        const previewAspect = width / Math.max(1, height);
+        const rawAspect = rawWidth / Math.max(1, rawHeight);
+        const aspectMismatch = Math.abs(previewAspect - rawAspect) / rawAspect > 0.03;
+
+        return { width, height, aspectMismatch };
+    } catch {
+        return null;
+    }
+}
+
+async function tryCreatePreviewFromJpegBytes(
+    jpegBytes: Uint8Array,
+    rawWidth: number,
+    rawHeight: number
+): Promise<{ objectUrl: string; dimensions: NonNullable<RawAnalysisResult['previewDimensions']> } | null> {
+    const blob = new Blob([jpegBytes], { type: 'image/jpeg' });
+    const dimensions = await readPreviewDimensions(blob, rawWidth, rawHeight);
+    if (!dimensions) return null;
+
+    return {
+        objectUrl: URL.createObjectURL(blob),
+        dimensions,
+    };
 }
 
 /** WASM 模块懒加载（首次调用时初始化，之后复用） */
@@ -202,18 +376,38 @@ async function parseRawBuffer(fileBuffer: ArrayBuffer): Promise<RawAnalysisResul
 
         // ── 步骤 6：提取内嵌预览 JPEG ─────────────────────────────────────────
         progress('正在提取视觉预览图...', 80);
-        const getPreviewPtr = m.cwrap('lra_get_preview_jpeg', 'number', []) as () => number;
-        const getPreviewSize = m.cwrap('lra_get_preview_size', 'number', []) as () => number;
-
         let previewObjectUrl: string | null = null;
-        const previewPtr = getPreviewPtr();
-        const previewSize = getPreviewSize();
+        let previewDimensions: RawAnalysisResult['previewDimensions'] = null;
 
-        if (previewPtr !== 0 && previewSize > 0) {
+        const embeddedJpegCandidates = scanTiffEmbeddedJpegs(bytes);
+        for (const candidate of embeddedJpegCandidates) {
+            const preview = await tryCreatePreviewFromJpegBytes(
+                bytes.subarray(candidate.offset, candidate.offset + candidate.length),
+                exif.width,
+                exif.height
+            );
+            if (preview) {
+                previewObjectUrl = preview.objectUrl;
+                previewDimensions = preview.dimensions;
+                break;
+            }
+        }
+
+        if (!previewObjectUrl) {
+            const getPreviewPtr = m.cwrap('lra_get_preview_jpeg', 'number', []) as () => number;
+            const getPreviewSize = m.cwrap('lra_get_preview_size', 'number', []) as () => number;
+            const previewPtr = getPreviewPtr();
+            const previewSize = getPreviewSize();
+
+            if (previewPtr !== 0 && previewSize > 0) {
             // 从 WASM 堆拷贝 JPEG 数据到 JS（Uint8Array 拷贝，不共享内存）
-            const jpegBytes = m.HEAPU8.slice(previewPtr, previewPtr + previewSize);
-            const blob = new Blob([jpegBytes], { type: 'image/jpeg' });
-            previewObjectUrl = URL.createObjectURL(blob);
+                const jpegBytes = m.HEAPU8.slice(previewPtr, previewPtr + previewSize);
+                const preview = await tryCreatePreviewFromJpegBytes(jpegBytes, exif.width, exif.height);
+                if (preview) {
+                    previewObjectUrl = preview.objectUrl;
+                    previewDimensions = preview.dimensions;
+                }
+            }
         }
 
         // ── 步骤 7：释放 LibRaw 资源 ──────────────────────────────────────────
@@ -221,7 +415,7 @@ async function parseRawBuffer(fileBuffer: ArrayBuffer): Promise<RawAnalysisResul
         const close = m.cwrap('lra_close', 'void', []) as () => void;
         close();
 
-        return { exif, physics, histogram64, histogram256, previewObjectUrl };
+        return { exif, physics, histogram64, histogram256, previewObjectUrl, previewDimensions };
 
     } finally {
         // 无论成功或失败，都释放 malloc 的文件缓冲区

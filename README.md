@@ -2,7 +2,7 @@
 
 > 上传照片，AI 生成专业级 Lightroom 调色预设（.xmp），一键下载导入。
 
-当前版本：`v0.1.4`（2026-03-04）
+当前版本：`v0.1.4`（`V1-test` 同步版，2026-05-13）
 
 Lumina 通过**前端 WASM 深度解析 RAW 底层物理数据** + **多模态大模型双维推理**，生成精准的 Lightroom 调色参数，并输出专业的"AI 调色诊断报告"。
 
@@ -15,7 +15,19 @@ Lumina 通过**前端 WASM 深度解析 RAW 底层物理数据** + **多模态�
 - **专业诊断报告**：四模块结构化报告（核心结论 → 底层剖析 → 美化建议 → 参数动作），兼顾小白与老手。
 - **XMP 模板引擎**：以 Lightroom 官方导出的预设文件作为唯一标准模板，按参数注入生成 100% 兼容 `.xmp`。
 - **多轮微调**：支持自然语言多轮对话（"肤色再亮一点"、"冷色调"），基于 Redis Session 复用上下文，无需重传图片。
+- **本地规则兜底**：未配置云端模型 Key 时，仍可基于 RAW/JPG 物理数据生成诊断报告与 Lightroom 参数。
+- **参考图追色**：支持上传参考图并按强度融合色彩统计，生成更贴近目标风格的 XMP 参数。
+- **风格意图增强**：内置风格画像与可选联网检索，用于理解 Portra、C200、赛博朋克等更具体的风格诉求。
 - **Lightroom 风格 UI**：填充式滑块、色彩编码 HSL 轨道、紧凑 22px 行高，还原专业调色体验。
+
+### V1-test 同步更新（2026-05-13）
+
+- **本地分析链路上线**：新增 `localAnalyzer`、风格画像、风格参数增强与微调变化量控制，弱网或无模型 Key 时也能完成首轮分析和多轮微调。
+- **参考图追色能力**：前端新增参考图上传、颜色统计、强度滑块与参数融合逻辑，后端 XMP 生成可直接使用当前融合参数。
+- **调色助手体验升级**：右侧面板支持诊断、参数、历史与助手对话联动，保留 refine 历史并支持下载当前版本。
+- **RAW 解析稳定性增强**：WASM Worker 增强错误处理与物理数据输出，`build.sh` 改为自动准备本地 `third_party/emsdk` 工具链目录。
+- **工程验证补齐**：新增后端 Vitest 单元测试、前端 Playwright smoke test 与 GitHub Actions CI。
+- **同步排除项**：`尼康预设/`、`test-image/`、`frontend/test-results/`、本地 WASM 工具链与备份文件均保持在 Git 外。
 
 ### v0.1.4 重点更新
 
@@ -75,13 +87,19 @@ Lumina/
 │   │   ├── left-sidebar.tsx    # 上传、风格选择、分析触发
 │   │   ├── center-canvas.tsx   # 图片预览 + 元数据
 │   │   ├── right-panel.tsx     # 诊断报告 / 参数滑块 / 下载
+│   │   ├── diagnostics-panel.tsx # 诊断指标摘要
 │   │   ├── param-slider.tsx    # Lightroom 风格填充式滑块
 │   │   └── ai-diagnostic-report.tsx
 │   ├── lib/
 │   │   ├── api.ts              # SSE 流式 fetch 封装
+│   │   ├── reference-color-match.ts # 参考图追色与参数融合
+│   │   ├── refine-history.ts   # 微调历史状态
+│   │   ├── canvas-utils.ts     # 画布颜色统计辅助
 │   │   ├── lightroom-params.ts # 60+ 参数定义（XMP 标准 Key）
 │   │   └── image-analysis.ts   # JPG 数据轨真实分析（直方图/极值/断层/ICC）
+│   ├── hooks/useAnalyzeFlow.ts # 分析 / 微调 / 下载主流程
 │   ├── hooks/useRawParser.ts   # WASM Worker 生命周期管理
+│   ├── e2e/                    # Playwright smoke tests
 │   ├── workers/raw-parser.worker.ts
 │   └── wasm/
 │       ├── CMakeLists.txt      # LibRaw WASM 编译配置
@@ -97,7 +115,10 @@ Lumina/
 │       │   └── xmp.ts          # POST /api/xmp
 │       ├── services/
 │       │   ├── llm.ts          # OpenAI SDK 双模型调度
+│       │   ├── localAnalyzer.ts # 本地规则诊断与参数生成
 │       │   ├── prompt.ts       # System Prompt + 用户 Prompt
+│       │   ├── styleProfiles.ts # 内置风格画像
+│       │   ├── styleSearch.ts  # 可选风格联网检索
 │       │   ├── session.ts      # Redis Session 管理
 │       │   └── xmp.ts          # XMP 标准模板注入引擎
 │       ├── utils/
@@ -119,11 +140,10 @@ Lumina/
 - pnpm ≥ 10
 - Redis（本地建议 Homebrew）
 
-### 1. 初始化仓库与子模块
+### 1. 初始化仓库
 
 ```bash
 git clone <repo-url> Lumina && cd Lumina
-git submodule update --init --recursive
 ```
 
 ### 2. 安装依赖（workspace）
@@ -136,7 +156,7 @@ pnpm install
 
 ```bash
 cp backend/.env.example backend/.env
-# 按需修改 OPENAI_API_KEY 等配置
+# DeepSeek 文本 key 填 TEXT_API_KEY；没有多模态 key 时保持 VISION_API_KEY 为空
 ```
 
 ### 4. 启动开发环境
@@ -158,16 +178,32 @@ bash build.sh
 # 产物：frontend/public/wasm/raw_analyzer.js
 ```
 
+`build.sh` 会优先使用本机已有 Emscripten；若需要本地工具链，请把 `third_party/emsdk/` 作为本地构建目录处理，不提交到 Git。
+
+### 6. 验证
+
+```bash
+pnpm --filter lumina-backend test
+pnpm --filter lumina-frontend --filter lumina-backend typecheck
+```
+
 ---
 
 ## 🔧 环境变量
 
 | 变量 | 说明 | 默认值 |
 |------|------|--------|
-| `OPENAI_API_KEY` | LLM API Key | — |
-| `OPENAI_BASE_URL` | API 代理地址 | `https://openai.linktre.cc/v1` |
-| `LLM_VISION_MODEL` | 首轮视觉模型 | `gpt-5-2025-08-07` |
-| `LLM_TEXT_MODEL` | 多轮文本模型 | `gpt-5-2025-08-07` |
+| `TEXT_API_KEY` | Text-only API Key，用于 Chat / 多轮微调；未配置时该路径走本地规则 | — |
+| `TEXT_BASE_URL` | Text-only API 地址，DeepSeek 默认地址 | `https://api.deepseek.com` |
+| `TEXT_MODEL` | Text-only 模型 | `deepseek-v4-flash` |
+| `VISION_API_KEY` | 多模态识图 API Key，仅用于首轮传图分析；未配置时首轮走本地规则 | — |
+| `VISION_BASE_URL` | 多模态识图 API 地址 | `https://api.openai.com/v1` |
+| `VISION_MODEL` | 首轮视觉模型 | `gpt-5-2025-08-07` |
+| `STYLE_WEB_SEARCH_ENABLED` | 是否启用 Chat / 微调风格意图联网检索 | `false` |
+| `STYLE_SEARCH_PROVIDER` | 风格检索供应商，`duckduckgo` 无需 key，`tavily` 更稳定 | `duckduckgo` |
+| `STYLE_SEARCH_API_KEY` | 风格检索 API Key，仅在启用联网检索时需要 | — |
+| `STYLE_SEARCH_CACHE_TTL_SECONDS` | 风格上下文缓存秒数 | `604800` |
+| `STYLE_SEARCH_MAX_RESULTS` | 单次风格检索结果数 | `5` |
 | `REDIS_URL` | Redis 连接地址 | `redis://127.0.0.1:6379` |
 | `SESSION_TTL` | Session 过期时间（秒） | `1800` |
 | `XMP_FILE_TTL_SECONDS` | XMP 文件有效期（秒） | `86400` |

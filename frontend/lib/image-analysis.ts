@@ -3,6 +3,14 @@ export interface DiagnosticReport {
     total: number
     grade: "S" | "A" | "B" | "C" | "D"
     tag: string
+    title: string
+    subtitle: string
+    confidence: string
+    dimensions: {
+      label: string
+      value: number
+      note: string
+    }[]
   }
   thinkingSteps: {
     label: string

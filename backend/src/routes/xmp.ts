@@ -2,9 +2,11 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { clampLightroomParams } from '../utils/clampParams.js';
 import { generateXMP } from '../services/xmp.js';
 import { writeXmpFile } from '../services/xmpFiles.js';
+import { updateSession } from '../services/session.js';
 
 interface XmpBody {
     lightroom_params?: Record<string, number | number[]>;
+    session_id?: string;
 }
 
 function isValidLightroomParamValue(value: unknown): value is number | number[] {
@@ -35,6 +37,12 @@ export async function xmpRoutes(fastify: FastifyInstance) {
         const clamped = clampLightroomParams(params);
         const xmpContent = generateXMP(clamped);
         const { downloadUrl } = writeXmpFile(xmpContent);
+
+        if (body?.session_id) {
+            await updateSession(body.session_id, {
+                lastLrParams: clamped,
+            });
+        }
 
         return reply.send({ download_url: downloadUrl });
     });

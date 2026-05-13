@@ -13,16 +13,28 @@ import type { RawDataForPrompt } from './prompt.js';
 const SESSION_TTL = parseInt(process.env.SESSION_TTL || '1800', 10); // 30min
 
 let redis: Redis | null = null;
+let redisFallbackLogged = false;
+let redisDisabled = false;
+
+const memorySessions = new Map<string, { data: SessionData; expiresAt: number }>();
 
 function getRedis(): Redis {
+    if (redisDisabled) {
+        throw new Error('Redis is disabled after falling back to in-memory sessions');
+    }
     if (!redis) {
         const url = process.env.REDIS_URL || 'redis://127.0.0.1:6379';
         redis = new Redis(url, {
-            maxRetriesPerRequest: 3,
+            maxRetriesPerRequest: 1,
             lazyConnect: true,
+            enableOfflineQueue: false,
+            connectTimeout: 500,
+            retryStrategy: () => null,
         });
         redis.on('error', (err) => {
-            console.error('[Redis Error]', err.message);
+            if (!redisFallbackLogged) {
+                console.error('[Redis Error]', err.message);
+            }
         });
     }
     return redis;
@@ -45,23 +57,71 @@ export interface SessionData {
 
 const KEY_PREFIX = 'lumina:session:';
 
+function logRedisFallback(err: unknown): void {
+    if (redisFallbackLogged) return;
+    redisFallbackLogged = true;
+    const message = err instanceof Error ? err.message : String(err);
+    console.warn(`[Redis Fallback] Session data will use in-memory storage: ${message}`);
+}
+
+function disableRedis(err: unknown): void {
+    logRedisFallback(err);
+    redisDisabled = true;
+    if (redis) {
+        redis.disconnect();
+        redis = null;
+    }
+}
+
+function cleanupMemorySessions(now = Date.now()): void {
+    for (const [key, value] of memorySessions.entries()) {
+        if (value.expiresAt <= now) {
+            memorySessions.delete(key);
+        }
+    }
+}
+
+function setMemorySession(sessionId: string, data: SessionData): void {
+    cleanupMemorySessions();
+    memorySessions.set(sessionId, {
+        data,
+        expiresAt: Date.now() + SESSION_TTL * 1000,
+    });
+}
+
+function getMemorySession(sessionId: string): SessionData | null {
+    cleanupMemorySessions();
+    return memorySessions.get(sessionId)?.data ?? null;
+}
+
+async function persistSession(sessionId: string, session: SessionData): Promise<void> {
+    setMemorySession(sessionId, session);
+
+    if (redisDisabled) return;
+
+    try {
+        await getRedis().set(
+            KEY_PREFIX + sessionId,
+            JSON.stringify(session),
+            'EX',
+            SESSION_TTL
+        );
+    } catch (err) {
+        disableRedis(err);
+    }
+}
+
 /**
  * 创建新 Session
  */
 export async function createSession(data: Omit<SessionData, 'round' | 'createdAt'>): Promise<string> {
-    const r = getRedis();
     const sessionId = `sess_${nanoid(12)}`;
     const session: SessionData = {
         ...data,
         round: 1,
         createdAt: new Date().toISOString(),
     };
-    await r.set(
-        KEY_PREFIX + sessionId,
-        JSON.stringify(session),
-        'EX',
-        SESSION_TTL
-    );
+    await persistSession(sessionId, session);
     return sessionId;
 }
 
@@ -69,10 +129,23 @@ export async function createSession(data: Omit<SessionData, 'round' | 'createdAt
  * 获取 Session
  */
 export async function getSession(sessionId: string): Promise<SessionData | null> {
-    const r = getRedis();
-    const raw = await r.get(KEY_PREFIX + sessionId);
-    if (!raw) return null;
-    return JSON.parse(raw) as SessionData;
+    const memorySession = getMemorySession(sessionId);
+    if (memorySession) return memorySession;
+
+    if (redisDisabled) return null;
+
+    try {
+        const raw = await getRedis().get(KEY_PREFIX + sessionId);
+        if (raw) {
+            const session = JSON.parse(raw) as SessionData;
+            setMemorySession(sessionId, session);
+            return session;
+        }
+    } catch (err) {
+        disableRedis(err);
+    }
+
+    return null;
 }
 
 /**
@@ -82,17 +155,11 @@ export async function updateSession(
     sessionId: string,
     updates: Partial<Pick<SessionData, 'lastLrParams' | 'round'>>
 ): Promise<void> {
-    const r = getRedis();
     const existing = await getSession(sessionId);
     if (!existing) return;
 
     const updated = { ...existing, ...updates };
-    await r.set(
-        KEY_PREFIX + sessionId,
-        JSON.stringify(updated),
-        'EX',
-        SESSION_TTL // 每次更新时续期
-    );
+    await persistSession(sessionId, updated);
 }
 
 /**

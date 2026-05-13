@@ -8,14 +8,17 @@
 
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { z } from 'zod';
-import { streamVisionAnalysis } from '../services/llm.js';
+import { isVisionLLMConfigured, streamVisionAnalysis } from '../services/llm.js';
 import { buildFirstRoundPrompt, type RawDataForPrompt } from '../services/prompt.js';
 import { createSession, summarizeRawData } from '../services/session.js';
 import { safeParseAIResponse } from '../utils/parseAI.js';
+import type { LLMResponse } from '../utils/parseAI.js';
 import { clampLightroomParams } from '../utils/clampParams.js';
 import { generateXMP } from '../services/xmp.js';
 import { writeXmpFile } from '../services/xmpFiles.js';
 import { enrichDiagnosticReport } from '../services/reportEnhancer.js';
+import { buildLocalAnalysis, detectScene, getSceneChips } from '../services/localAnalyzer.js';
+import { enhanceParamsForStyleIntent } from '../services/styleParamEnhancer.js';
 
 const rawDataSchema = z.object({
     file_type: z.enum(['NEF', 'JPG']),
@@ -43,7 +46,7 @@ const rawDataSchema = z.object({
 export async function analyzeRoutes(fastify: FastifyInstance) {
     fastify.post('/api/analyze', async (request: FastifyRequest, reply: FastifyReply) => {
         const parts = request.parts();
-        let previewImageBase64 = '';
+        let previewImageBuffer: Buffer = Buffer.alloc(0);
         let rawDataStr = '';
         let userIntent = '';
         let style = 'auto';
@@ -54,7 +57,8 @@ export async function analyzeRoutes(fastify: FastifyInstance) {
                 for await (const chunk of part.file) {
                     chunks.push(chunk);
                 }
-                previewImageBase64 = Buffer.concat(chunks).toString('base64');
+                // 关键：保留 Buffer 不立即转 base64，节省整个 SSE 生命周期内的内存。
+                previewImageBuffer = Buffer.concat(chunks);
             } else if (part.type === 'field') {
                 const value = part.value as string;
                 if (part.fieldname === 'raw_data') rawDataStr = value;
@@ -63,7 +67,7 @@ export async function analyzeRoutes(fastify: FastifyInstance) {
             }
         }
 
-        if (!previewImageBase64 || !rawDataStr) {
+        if (previewImageBuffer.length === 0 || !rawDataStr) {
             return reply.status(400).send({
                 error: 'Missing required fields: preview_image and raw_data',
             });
@@ -108,11 +112,76 @@ export async function analyzeRoutes(fastify: FastifyInstance) {
             });
         };
 
-        sendProgress(6, 'upload_received', '已收到图片，正在读取底层数据...');
-        sendProgress(11, 'dual_track_validated', '双轨校验通过：视觉轨与物理数据轨均已就绪。');
+        sendProgress(6, 'upload_received', '已收到图片，正在读取图像数据...');
+        sendProgress(
+            11,
+            rawData.file_type === 'NEF' ? 'dual_track_validated' : 'visual_track_validated',
+            rawData.file_type === 'NEF'
+                ? 'RAW 双层校验通过：视觉轨与物理数据轨均已就绪。'
+                : 'JPG 视觉轨校验通过：将按预览图与压缩特征生成建议。'
+        );
 
         const userPrompt = buildFirstRoundPrompt(rawData, userIntent, style);
-        sendProgress(18, 'prompt_ready', '数据轨准备完成，正在组织分析提示...');
+        sendProgress(
+            18,
+            'prompt_ready',
+            rawData.file_type === 'NEF'
+                ? 'RAW 数据轨准备完成，正在组织分析提示...'
+                : 'JPG 视觉分析数据准备完成，正在组织分析提示...'
+        );
+
+        const finalizeAnalysis = async (result: LLMResponse) => {
+            sendProgress(84, 'parsing', '正在校验参数并生成 XMP...');
+
+            const styleEnhancedParams = enhanceParamsForStyleIntent(result.lightroom_params, userIntent, style, rawData);
+            const clamped = clampLightroomParams(styleEnhancedParams);
+            const enrichedReport = enrichDiagnosticReport(
+                result.diagnostic_report,
+                rawData,
+                clamped
+            );
+
+            const xmpContent = generateXMP(clamped);
+            const { downloadUrl } = writeXmpFile(xmpContent);
+
+            const sessionId = await createSession({
+                previewImageBase64: previewImageBuffer.toString('base64'),
+                rawData,
+                lastLrParams: clamped,
+                rawDataSummary: summarizeRawData(rawData),
+            });
+
+            sendProgress(96, 'xmp_ready', 'XMP 已生成，准备返回结果...');
+            sendSSE({
+                type: 'final',
+                session_id: sessionId,
+                scene_label: detectScene(rawData, userIntent, style),
+                quick_chips: getSceneChips(detectScene(rawData, userIntent, style)),
+                diagnostic_report: enrichedReport,
+                lightroom_params: clamped,
+                download_url: downloadUrl,
+            });
+        };
+
+        if (!isVisionLLMConfigured()) {
+            try {
+                sendProgress(30, 'local_rules_started', '未配置多模态识图 API，正在使用本地调色规则引擎...');
+                const localResult = buildLocalAnalysis(rawData, userIntent, style);
+                sendSSE({
+                    type: 'text',
+                    content: '本地规则引擎已读取直方图、位深、宽容度、ISO、通道倍率与用户意图，正在生成可导入 Lightroom 的 XMP 参数。',
+                });
+                sendProgress(70, 'local_rules_ready', '本地调色建议已生成，正在写入 XMP...');
+                await finalizeAnalysis(localResult);
+            } catch (err) {
+                sendSSE({
+                    type: 'error',
+                    message: err instanceof Error ? err.message : 'Local analysis failed',
+                });
+            }
+            reply.raw.end();
+            return;
+        }
 
         await new Promise<void>((resolve) => {
             let firstTokenReceived = false;
@@ -125,7 +194,7 @@ export async function analyzeRoutes(fastify: FastifyInstance) {
                 sendProgress(heartbeatProgress, 'llm_waiting', 'AI 正在推理中，这一步通常需要几十秒...');
             }, 5000);
 
-            streamVisionAnalysis(userPrompt, previewImageBase64, {
+            streamVisionAnalysis(userPrompt, previewImageBuffer, {
                 onTextChunk(text) {
                     if (!firstTokenReceived) {
                         firstTokenReceived = true;
@@ -140,34 +209,8 @@ export async function analyzeRoutes(fastify: FastifyInstance) {
                         if (!firstTokenReceived) {
                             sendProgress(64, 'llm_buffer_ready', '模型已返回完整内容，正在整理结果...');
                         }
-                        sendProgress(84, 'parsing', '正在校验参数并生成 XMP...');
-
                         const parsed = safeParseAIResponse(fullText);
-                        const clamped = clampLightroomParams(parsed.lightroom_params);
-                        const enrichedReport = enrichDiagnosticReport(
-                            parsed.diagnostic_report,
-                            rawData,
-                            clamped
-                        );
-
-                        const xmpContent = generateXMP(clamped);
-                        const { downloadUrl } = writeXmpFile(xmpContent);
-
-                        const sessionId = await createSession({
-                            previewImageBase64,
-                            rawData,
-                            lastLrParams: clamped,
-                            rawDataSummary: summarizeRawData(rawData),
-                        });
-
-                        sendProgress(96, 'xmp_ready', 'XMP 已生成，准备返回结果...');
-                        sendSSE({
-                            type: 'final',
-                            session_id: sessionId,
-                            diagnostic_report: enrichedReport,
-                            lightroom_params: clamped,
-                            download_url: downloadUrl,
-                        });
+                        await finalizeAnalysis(parsed);
                     } catch (err) {
                         sendSSE({
                             type: 'error',

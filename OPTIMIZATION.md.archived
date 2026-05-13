@@ -1,0 +1,236 @@
+# Lumina 优化跟进清单
+
+> 本次迭代（v0.1.4 → v0.1.5）已完成 5 项必修；本文件记录尚未落地的部分。
+> 按"立即可做 → 中期优化 → 长期 roadmap"三档组织，括号里是参考工时。
+
+---
+
+## 一、立即可做（< 30 分钟，必做）
+
+这两件没做的话，前面 5 项必修中 **#4 WASM 内存优化** 与 **#2 单测**两条只在源码生效、运行时还没生效。
+
+### ✅ 1) 重新编译 WASM 让 `half_size=1` 生效（5–10 分钟）
+
+`frontend/wasm/src/raw_analyzer.cpp` 已加 `params.half_size = 1` + unpack 失败降级，但 `frontend/public/wasm/raw_analyzer.js` 是旧产物。重编一次：
+
+```bash
+cd "/Volumes/Extreme SSD/Lumina-AI_1.0 /frontend/wasm"
+./build.sh
+```
+
+`build.sh` 已注入"首次构建自动 clone emsdk"逻辑，第一次会从 GitHub 拉 `emsdk` 到 `third_party/emsdk/`（已加 `.gitignore`），后续不再重拉。
+
+**验证：** 重编后上传 45MP 的 NEF，浏览器 DevTools Performance 看 worker 进程内存峰值应从 ~340MB 降至 ~85MB。
+
+### ✅ 2) `pnpm install` 让 vitest devDep 入 lockfile（1 分钟）
+
+`backend/package.json` 已加 `vitest@^2.1.9` 与 `test` 脚本，但本地 `node_modules` 还没装。
+
+```bash
+cd "/Volumes/Extreme SSD/Lumina-AI_1.0 /backend"
+pnpm install
+pnpm test
+```
+
+期望输出：
+```
+ ✓ tests/clampParams.test.ts   (7 tests)
+ ✓ tests/parseAI.test.ts       (10 tests)
+ ✓ tests/localAnalyzer.test.ts (11 tests)
+ Test Files  3 passed (3)
+ Tests       28 passed (28)
+```
+
+把 `pnpm test` 接到 CI 的 PR check 上，以后 LLM API 字段微调、新机型解析等改动会自动卡住坏掉的 PR。
+
+---
+
+## 二、中期优化（半天到一天，按需）
+
+### ✅ 3) `page.tsx` 切换到 `useAnalyzeFlow` hook（4–6 小时）
+
+**当前状态：** Hook 实现已就绪在 `frontend/hooks/useAnalyzeFlow.ts`（271 行，含集成指引注释），但 `app/page.tsx` 仍维持原样的 11 个 useState + 100+ 行的 `handleAnalyze`。
+
+**为什么没现在切：** 涉及 5 个 callback 链路 + 6 处 props 同步迁移（CenterCanvas / RightPanel / LeftSidebar 都从 page.tsx 读这些 state），改造面大，无法本地实测整流验证，强切容易引回归。
+
+**集成步骤（从轻到重）：**
+
+1. **替换 11 个 useState 为单个 hook 调用**
+
+   删除 `app/page.tsx` 行 151–168 的：
+   ```tsx
+   const [isAnalyzing, setIsAnalyzing] = useState(false)
+   const [analysisProgress, setAnalysisProgress] = useState(0)
+   const [analysisStage, setAnalysisStage] = useState<...>(null)
+   const [analysisEvents, setAnalysisEvents] = useState<string[]>([])
+   const [diagnostics, setDiagnostics] = useState<ImageDiagnostics | null>(null)
+   const [report, setReport] = useState<DiagnosticReport | null>(null)
+   const [aiRecommendedParams, setAiRecommendedParams] = useState<...>(null)
+   const [aiModifiedKeys, setAiModifiedKeys] = useState<Set<string>>(new Set())
+   const [downloadUrl, setDownloadUrl] = useState<string | null>(null)
+   const [sessionId, setSessionId] = useState<string | null>(null)
+   const [analysisRawPayload, setAnalysisRawPayload] = useState<RawDataPayload | null>(null)
+   ```
+
+   替换为：
+   ```tsx
+   const flow = useAnalyzeFlow({
+     buildRawDataPayload,
+     buildPreviewBlob: async () => {
+       if (fileType === "nef") {
+         const url = rawParser.result?.previewObjectUrl
+         if (!url) throw new Error("NEF 预览图缺失")
+         const blob = await (await fetch(url)).blob()
+         return compressPreviewBlob(blob)
+       }
+       return buildJpgPreviewBlob(currentFile!)
+     },
+     userIntent,
+     selectedStyle,
+     convertToReport: convertToDiagnosticReport,
+     onParamsResolved: (recommended) => {
+       setParams({ ...getDefaultParams(), ...recommended })
+     },
+   })
+   ```
+
+2. **删除整个 `handleAnalyze` 函数体**（行 434–567），改为 `const handleAnalyze = flow.analyze`。
+
+3. **重写 `handleRefinement`**：原来手工 set 8 个 state 的代码，改为：
+   ```tsx
+   onFinal(data) {
+     flow.applyFinalResult(data, payloadForReport)
+     // 刷新 params
+     setParams({ ...getDefaultParams(),
+       ...Object.fromEntries(
+         Object.entries(data.lightroom_params).filter(([,v]) => typeof v === "number")
+       ) as Record<string, number>
+     })
+     toast.success("调整完成", { description: `已根据"${text}"重新生成调色方案` })
+   },
+   ```
+
+4. **handleFileUpload 里的 reset 链**：把 `setIsAnalyzing(false)` / `setAnalysisProgress(0)` / `setDiagnostics(null)` / ... 一长串改成 `flow.reset()`。
+
+5. **handleRegenerate** 里的 `setDownloadUrl(null)` 改成 `flow.clearDownloadUrl()`。
+
+6. **下游 props 改名**：CenterCanvas / RightPanel / LeftSidebar 之前传 `diagnostics`、`report`、`aiRecommendedParams`、`aiModifiedKeys`、`isAnalyzing`、`analysisStage`、`analysisProgress`、`analysisEvents`、`xmpReady`，全部对应改为 `flow.*`。比如：
+   ```tsx
+   <RightPanel
+     report={flow.report}
+     aiRecommendedParams={flow.aiRecommendedParams}
+     aiModifiedKeys={flow.aiModifiedKeys}
+     isAnalyzing={flow.isAnalyzing}
+     xmpReady={flow.downloadUrl !== null}
+     ...
+   />
+   ```
+
+7. **跑回归**：上传 NEF/JPG 各一张走完"分析 → 微调 → 下载 XMP"全流程，重点看 toast 时机、进度条是否还流畅。
+
+**预期收益：** `page.tsx` 794 → ~480 行（−40%）；`flow` 是单值闭包，未来加 abort、加 retry、加 history 时无需再改 page。
+
+### ✅ 4) 抽 `@lumina/core` workspace（半天）
+
+把 `backend/src/services/{localAnalyzer,prompt,reportEnhancer}.ts` + `backend/src/utils/{parseAI,clampParams}.ts` 移到 `packages/core/` 作为 pnpm workspace。
+
+```
+packages/core/
+  ├─ src/
+  │  ├─ localAnalyzer.ts
+  │  ├─ parseAI.ts
+  │  ├─ clampParams.ts
+  │  ├─ prompt.ts        (仅 type，不带 SYSTEM_PROMPT 字符串)
+  │  └─ reportEnhancer.ts
+  ├─ package.json        ({"name": "@lumina/core"})
+  └─ tsconfig.json
+```
+
+`pnpm-workspace.yaml` 增一行 `- "packages/*"`。
+
+**收益：**
+- 前端可直接 `import { buildLocalAnalysis } from '@lumina/core'`，**本地引擎模式不再需要 backend**
+- 整个 app 退化成纯 Next.js 静态站点 → **直接 Vercel 一键部署**，零冷启
+- 28 个单测自然带过去，前后端共用同一份逻辑
+
+### ✅ 5) 删 47 个僵尸 shadcn/ui 组件（30 分钟）
+
+```bash
+cd "/Volumes/Extreme SSD/Lumina-AI_1.0 /frontend"
+npx knip   # 输出未使用文件清单
+```
+
+实测当前 57 个 ui 组件中，实际被引用的不到 10 个。删完跟着 `package.json` 里的 30+ 个 `@radix-ui/*` 也一起 rm，bundle 估计可减 200-300KB JS。
+
+### ✅ 6) Redis 永久 disable 修复（10 分钟）
+
+`backend/src/services/session.ts:73` 的 `disableRedis()` 在进程 lifetime 内不再重试。改成时间窗口：
+
+```ts
+let redisDisabledUntil = 0
+function disableRedis(err: unknown): void {
+    logRedisFallback(err)
+    redisDisabledUntil = Date.now() + 60_000  // 60 秒重试窗口
+    if (redis) { redis.disconnect(); redis = null }
+}
+function getRedis(): Redis {
+    if (Date.now() < redisDisabledUntil) {
+        throw new Error('Redis still disabled, use memory fallback')
+    }
+    if (!redis) { /* ... 原 lazy init 不变 ... */ }
+    return redis
+}
+```
+
+### ✅ 7) SSE 加 AbortController（20 分钟）
+
+`frontend/lib/api.ts` 的 `analyzeWithSSE`：
+
+```ts
+export async function analyzeWithSSE(...args, signal?: AbortSignal): Promise<void> {
+    const response = await fetch(`${API_BASE}/api/analyze`, {
+        method: 'POST', body: formData, signal,
+    })
+    ...
+}
+```
+
+调用方在组件 unmount 时 `controller.abort()`，避免用户切走页面后还在烧后端 token。
+
+---
+
+## 三、长期 roadmap（按业务优先级排）
+
+### 性能/工程
+
+| 项 | 工时 | 说明 |
+|---|---|---|
+| WASM 关闭 SINGLE_FILE + Service Worker 预缓存 `.wasm` | 半天 | 首屏加载 -1.5s |
+| 同 NEF 文件 hash → IndexedDB 缓存物理数据 | 半天 | 重传秒回 |
+| 接 Sentry / OpenTelemetry | 半天 | 线上故障可观测 |
+| API rate limit + IP 限流 | 半天 | 上线必备防滥用 |
+
+### 产品力
+
+| 项 | 工时 | 说明 |
+|---|---|---|
+| 支持 CR2/CR3/ARW/RAF/DNG | 1 天 | LibRaw 原生支持，前端类型放开 + 文件名校验 | 用户群 ×3 |
+| WebGL/WebGPU LUT 真实预览 | 1 周 | 当前 CSS filter 与导入 LR 实际效果偏差大；做 33×33×33 LUT shader |
+| 导出 `.cube` LUT（非仅 XMP） | 半天 | FCP/Davinci/Resolve/OBS 用户 |
+| 批量上传 NEF + 一键套同风格 | 1 天 | 摄影师刚需 |
+| Refine 历史 + Undo + 多版本 split 对比 | 1 天 | 工作流必备 |
+| PWA + 离线模式 | 半天 | 既然 LibRaw + localAnalyzer 都纯本地，技术零阻力 |
+
+---
+
+## 已完成清单（v0.1.5 dev）
+
+- [x] **#3** `third_party/emsdk` 从 git 移除（`.gitignore` + `build.sh` 自动 clone）
+- [x] **#5** `previewImageBase64` 改 `Buffer` 透传，base64 仅在 fetch JSON 内联编码（`asBase64()` helper）
+- [x] **#4** `raw_analyzer.cpp` 加 `params.half_size = 1` + unpack 失败降级（**需重编 WASM**）
+- [x] **#2** vitest + 28 个单测（parseAI / localAnalyzer / clampParams）；含发现并修正的 `buildLocalRefine` 调用顺序 bug
+- [x] **#1（部分）** `center-canvas.tsx` 1101 → 698 行；抽 `diagnostics-panel.tsx`、`lib/canvas-utils.ts`、`hooks/useAnalyzeFlow.ts`；page.tsx 切换留作 §3
+
+---
+
+> 这份文件随项目迭代更新。下一次完成"立即可做"两条后，把对应行打勾、并把 §3 page.tsx 集成提到立即可做档。

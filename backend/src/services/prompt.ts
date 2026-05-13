@@ -1,3 +1,6 @@
+import { formatStyleContextForPrompt, type StyleContext } from './styleContext.js';
+import { formatStyleProfileForPrompt, type StyleIntentProfile } from './styleProfiles.js';
+
 /**
  * prompt.ts — System Prompt 组装
  *
@@ -43,6 +46,13 @@ const SYSTEM_PROMPT = `[Role Definition / 角色定义]
 3. 宽容度重映射 (Tonal Sculpting)：根据极值占比，计算 Highlights2012, Shadows2012, Whites2012, Blacks2012。
 4. 语义色彩分级 (Semantic Color Grading)：基于视觉识别出的语义（天空/植物/人脸），使用 HSL 和颜色分级进行精准上色。
 5. 画质防御结算 (Quality Defense)：基于 ISO、色彩深度和断层风险，结算降噪、清晰度与颗粒参数。
+
+[Visible Style Budget / 可见变化预算]
+当用户选择风格预设或提出风格化 chat 指令时，你必须让变化在预览图上一眼可见，而不是只做细小微调。
+- 风格类输出必须至少覆盖 3 个维度：基础光影、白平衡/冷暖、HSL、质感/颗粒、分离色调。
+- 除非底片物理风险明确禁止，否则关键风格参数必须达到可见阈值：HSL 位移通常 >= 12，黑白/胶片/电影感的对比或黑位位移通常 >= 10，颗粒风格 GrainAmount 通常 >= 18。
+- 如果用户要求“更明显/强一点/风格化”，优先扩大 HSL、冷暖、黑位、颗粒和分离色调，而不是只改 Exposure。
+- 任何可见变化都必须服从肤色、JPG/8-bit、高光溢出和高 ISO 风险边界。
 
 [Chain of Thought / 思考链路]
 当接收到用户上传的【视觉预览图】和【物理数据 JSON】时，你必须严格按照以下三步进行思考：
@@ -146,17 +156,40 @@ ${userIntent ? `\n[用户自然语言意图]: ${userIntent}` : ''}
 请结合上方的物理数据和随附的视觉预览图，严格按照 System Prompt 中的 5 步工作流执行推导，输出 JSON。
 
 提醒：这次任务是双轨融合分析（视觉语义 + RAW/JPG 物理数据）。diagnostic_report 必须体现两条轨道如何共同约束参数。
+重要：如果用户选择了风格或描述了审美目标，请先建立“画面语义 + 底片风险 + 风格目标 + 可见变化预算”，再输出参数。风格变化必须在网页预览和 Lightroom 中都能被肉眼感知。
 重要：请把输出控制在紧凑长度，并确保 JSON 从 { 开始到 } 结束且完整闭合。`;
 }
 
 /**
- * 构建多轮微调的用户 Prompt（不传图，不传完整物理数据）
+ * 构建多轮微调的用户 Prompt（可选传图，不重传完整物理数据）
  */
 export function buildRefinePrompt(
   prevParams: Record<string, number | number[]>,
   newIntent: string,
-  rawDataSummary: string
+  rawDataSummary: string,
+  styleContext?: StyleContext | null,
+  styleProfile?: StyleIntentProfile | null,
+  useVisionImage = false
 ): string {
+  const styleProfileBlock = styleProfile
+    ? `
+[本地风格解析主干，优先于联网资料]:
+\`\`\`json
+${formatStyleProfileForPrompt(styleProfile)}
+\`\`\`
+
+约束：这是稳定风格词典给出的参数方向和最低可见变化阈值。你必须把它作为风格类微调的主参考，并在 RAW/JPG 安全边界内让变化明显可见。`
+    : '';
+  const styleContextBlock = styleContext
+    ? `
+[联网风格参考，不可覆盖物理数据边界]:
+\`\`\`json
+${formatStyleContextForPrompt(styleContext)}
+\`\`\`
+
+约束：以上联网资料只能作为审美倾向和参数偏置参考；不得复刻任何付费 XMP/DNG/LUT 参数；RAW/JPG 物理数据、肤色保护和 clamp 规则优先级更高。`
+    : '';
+
   return `用户对上一轮的调色方案进行了微调。
 
 [上一轮输出的 lightroom_params]:
@@ -167,8 +200,16 @@ ${JSON.stringify(prevParams)}
 [底片物理数据概要]: ${rawDataSummary}
 
 [用户新的微调意图]: ${newIntent}
+${useVisionImage ? '\n[视觉输入]: 本轮会附带原始预览图，请重新观察主体、肤色、光线、天空/植物/人造光源和局部风险后再调参。' : '\n[视觉输入]: 本轮不附带图片，请严格基于上一轮参数、底片摘要和风格解析做保守推断。'}
+${styleProfileBlock}
+${styleContextBlock}
 
-请在上一轮参数的基础上，根据用户的新意图进行调整。只需输出修改后的完整 lightroom_params 和更新后的 diagnostic_report。输出格式与 System Prompt 要求一致。`;
+请在上一轮参数的基础上，根据用户的新意图进行调整。只需输出修改后的完整 lightroom_params 和更新后的 diagnostic_report。输出格式与 System Prompt 要求一致。
+
+硬要求：
+- 如果这是风格/审美类请求，禁止只输出几乎无差异的小改动；至少 3 个核心参数应产生可感知位移。
+- 输出必须说明“本轮相对上一版到底改变了哪些视觉维度”，例如光影、冷暖、HSL、颗粒、黑位或分离色调。
+- 如果物理风险限制了风格强度，需要在 report 中说明限制原因，并用安全替代参数体现风格。`;
 }
 
 export { SYSTEM_PROMPT };

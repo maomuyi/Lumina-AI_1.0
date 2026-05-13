@@ -6,6 +6,9 @@
     "dev": "pnpm --parallel --filter lumina-frontend --filter lumina-backend dev",
     "build": "pnpm --filter lumina-frontend --filter lumina-backend build",
     "lint": "pnpm --filter lumina-frontend --filter lumina-backend lint",
-    "typecheck": "pnpm --filter lumina-frontend --filter lumina-backend typecheck"
+    "typecheck": "pnpm --filter lumina-frontend --filter lumina-backend typecheck",
+    "test": "pnpm --filter lumina-backend test",
+    "test:backend": "pnpm --filter lumina-backend test",
+    "test:e2e": "pnpm --filter lumina-frontend test:e2e"
   }
 }

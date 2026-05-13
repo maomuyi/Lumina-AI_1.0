@@ -81,6 +81,38 @@ const PARAM_BOUNDS: Record<string, [number, number]> = {
     GrainFrequency: [0, 100],
 };
 
+const HSL_SATURATION_KEYS = [
+    'SaturationAdjustmentRed',
+    'SaturationAdjustmentOrange',
+    'SaturationAdjustmentYellow',
+    'SaturationAdjustmentGreen',
+    'SaturationAdjustmentAqua',
+    'SaturationAdjustmentBlue',
+    'SaturationAdjustmentPurple',
+    'SaturationAdjustmentMagenta',
+];
+
+function hasBlackWhiteSignal(params: Record<string, number | number[]>): boolean {
+    const saturation = typeof params.Saturation === 'number' ? params.Saturation : 0;
+    const hslAverage =
+        HSL_SATURATION_KEYS.reduce((sum, key) => {
+            const value = params[key];
+            return sum + (typeof value === 'number' ? value : 0);
+        }, 0) / HSL_SATURATION_KEYS.length;
+
+    return saturation <= -95 || hslAverage <= -80;
+}
+
+function applyBlackWhiteNumericPreset(params: Record<string, number | number[]>): void {
+    params.Vibrance = Math.min(typeof params.Vibrance === 'number' ? params.Vibrance : 0, -100);
+    params.Saturation = -100;
+    for (const key of HSL_SATURATION_KEYS) {
+        params[key] = -100;
+    }
+    params.SplitToningShadowSaturation = 0;
+    params.SplitToningHighlightSaturation = 0;
+}
+
 /**
  * 所有已知参数的默认值（未被 AI 修改时填入 XMP 模板的值）
  */
@@ -175,6 +207,10 @@ export function clampLightroomParams(
             // 未知参数仍然保留（可能是新版 LR 参数）
             result[key] = numVal;
         }
+    }
+
+    if (hasBlackWhiteSignal(result)) {
+        applyBlackWhiteNumericPreset(result);
     }
 
     return result;

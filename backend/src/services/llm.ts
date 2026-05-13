@@ -7,20 +7,22 @@
  *
  * 模型分层调度：
  * - 第 1 轮：Vision-LLM（传图）
- * - 第 2+ 轮：Text-only LLM（不传图，速度快 3~5x）
+ * - 第 2+ 轮：风格/审美微调优先 Vision-LLM，未配置时降级 Text/本地规则
  */
 
 import OpenAI from 'openai';
 import { SYSTEM_PROMPT } from './prompt.js';
 
-const openai = new OpenAI({
-    apiKey: process.env.OPENAI_API_KEY || '',
-    baseURL: process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1',
-});
 const LLM_MAX_OUTPUT_TOKENS = parseInt(process.env.LLM_MAX_OUTPUT_TOKENS || '2048', 10);
 const LLM_PRIMARY_TIMEOUT_MS = parseInt(process.env.LLM_PRIMARY_TIMEOUT_MS || '120000', 10);
 const LLM_FALLBACK_TIMEOUT_MS = parseInt(process.env.LLM_FALLBACK_TIMEOUT_MS || '90000', 10);
 const LLM_PRIMARY_RETRY_COUNT = Math.max(0, parseInt(process.env.LLM_PRIMARY_RETRY_COUNT || '1', 10));
+const DEFAULT_TEXT_BASE_URL = 'https://api.deepseek.com';
+const DEFAULT_VISION_BASE_URL = 'https://api.openai.com/v1';
+const DEFAULT_TEXT_MODEL = 'deepseek-v4-flash';
+const DEFAULT_VISION_MODEL = 'gpt-5-2025-08-07';
+
+type LLMChannel = 'text' | 'vision';
 
 export interface StreamCallbacks {
     /** 每收到一个文本 chunk 时触发（用于 SSE 推送给前端） */
@@ -34,6 +36,86 @@ export interface StreamCallbacks {
 function toErrorMessage(err: unknown): string {
     if (err instanceof Error) return err.message;
     return String(err);
+}
+
+function cleanEnv(name: string): string {
+    return (process.env[name] || '').trim();
+}
+
+function isConfiguredSecret(value: string): boolean {
+    if (!value) return false;
+    return ![
+        'sk-your-key-here',
+        'your-text-api-key-here',
+        'your-vision-api-key-here',
+        'your-deepseek-api-key-here',
+        'your-openai-vision-api-key-here',
+    ].includes(value);
+}
+
+function getApiKey(channel: LLMChannel): string {
+    return cleanEnv(channel === 'text' ? 'TEXT_API_KEY' : 'VISION_API_KEY');
+}
+
+function getBaseURL(channel: LLMChannel): string {
+    if (channel === 'text') return cleanEnv('TEXT_BASE_URL') || DEFAULT_TEXT_BASE_URL;
+    return cleanEnv('VISION_BASE_URL') || DEFAULT_VISION_BASE_URL;
+}
+
+function getModel(channel: LLMChannel): string {
+    if (channel === 'text') {
+        return cleanEnv('TEXT_MODEL') || cleanEnv('LLM_TEXT_MODEL') || DEFAULT_TEXT_MODEL;
+    }
+    return cleanEnv('VISION_MODEL') || cleanEnv('LLM_VISION_MODEL') || DEFAULT_VISION_MODEL;
+}
+
+function shouldDisableThinking(model: string): boolean {
+    return /^deepseek-v4/i.test(model) && cleanEnv('TEXT_ENABLE_THINKING') !== 'true';
+}
+
+function maybeAddTextModelOptions(
+    model: string,
+    body: Record<string, unknown>
+): Record<string, unknown> {
+    if (!shouldDisableThinking(model)) return body;
+    return {
+        ...body,
+        thinking: {
+            type: 'disabled',
+        },
+    };
+}
+
+function createClient(channel: LLMChannel): OpenAI {
+    return new OpenAI({
+        apiKey: getApiKey(channel),
+        baseURL: getBaseURL(channel),
+    });
+}
+
+export function isTextLLMConfigured(): boolean {
+    return isConfiguredSecret(getApiKey('text'));
+}
+
+export function isVisionLLMConfigured(): boolean {
+    return isConfiguredSecret(getApiKey('vision'));
+}
+
+function assertChannelConfigured(channel: LLMChannel): void {
+    const envName = channel === 'text' ? 'TEXT_API_KEY' : 'VISION_API_KEY';
+    const label = channel === 'text' ? 'Text-only LLM' : 'Vision LLM';
+    if (!isConfiguredSecret(getApiKey(channel))) {
+        throw new Error(`${label} is not configured. Please set ${envName} in backend/.env.`);
+    }
+}
+
+
+/**
+ * 把 Buffer 或已编码 base64 字符串统一变成 base64 字符串。
+ * 关键点：Buffer 路径直接 toString，避免外层提前持有 67MB 字符串。
+ */
+function asBase64(input: Buffer | string): string {
+    return typeof input === 'string' ? input : input.toString('base64');
 }
 
 function extractResponsesText(response: unknown): string {
@@ -55,13 +137,14 @@ function extractResponsesText(response: unknown): string {
 }
 
 async function streamVisionViaChatCompletions(
+    client: OpenAI,
     model: string,
     userPrompt: string,
-    previewImageBase64: string,
+    previewImage: Buffer | string,
     callbacks: StreamCallbacks,
     signal: AbortSignal
 ): Promise<string> {
-    const stream = await openai.chat.completions.create({
+    const stream = await client.chat.completions.create({
         model,
         stream: true,
         max_tokens: LLM_MAX_OUTPUT_TOKENS,
@@ -74,7 +157,7 @@ async function streamVisionViaChatCompletions(
                     {
                         type: 'image_url',
                         image_url: {
-                            url: `data:image/jpeg;base64,${previewImageBase64}`,
+                            url: `data:image/jpeg;base64,${asBase64(previewImage)}`,
                             detail: 'high',
                         },
                     },
@@ -100,12 +183,13 @@ async function streamVisionViaChatCompletions(
 }
 
 async function completeVisionViaResponses(
+    client: OpenAI,
     model: string,
     userPrompt: string,
-    previewImageBase64: string,
+    previewImage: Buffer | string,
     signal: AbortSignal
 ): Promise<string> {
-    const response = await openai.responses.create({
+    const response = await client.responses.create({
         model,
         temperature: 0.3,
         max_output_tokens: LLM_MAX_OUTPUT_TOKENS,
@@ -119,7 +203,7 @@ async function completeVisionViaResponses(
                 content: [
                     {
                         type: 'input_image',
-                        image_url: `data:image/jpeg;base64,${previewImageBase64}`,
+                        image_url: `data:image/jpeg;base64,${asBase64(previewImage)}`,
                     },
                     {
                         type: 'input_text',
@@ -138,12 +222,13 @@ async function completeVisionViaResponses(
 }
 
 async function streamTextViaChatCompletions(
+    client: OpenAI,
     model: string,
     userPrompt: string,
     callbacks: StreamCallbacks,
     signal: AbortSignal
 ): Promise<string> {
-    const stream = await openai.chat.completions.create({
+    const requestBody = maybeAddTextModelOptions(model, {
         model,
         stream: true,
         max_tokens: LLM_MAX_OUTPUT_TOKENS,
@@ -152,7 +237,8 @@ async function streamTextViaChatCompletions(
             { role: 'system', content: SYSTEM_PROMPT },
             { role: 'user', content: userPrompt },
         ],
-    }, { signal });
+    });
+    const stream = await client.chat.completions.create(requestBody as unknown as Parameters<typeof client.chat.completions.create>[0] & { stream: true }, { signal });
 
     let fullText = '';
     for await (const chunk of stream) {
@@ -170,11 +256,12 @@ async function streamTextViaChatCompletions(
 }
 
 async function completeTextViaResponses(
+    client: OpenAI,
     model: string,
     userPrompt: string,
     signal: AbortSignal
 ): Promise<string> {
-    const response = await openai.responses.create({
+    const response = await client.responses.create({
         model,
         temperature: 0.3,
         max_output_tokens: LLM_MAX_OUTPUT_TOKENS,
@@ -265,20 +352,27 @@ async function runWithFallback(
  */
 export async function streamVisionAnalysis(
     userPrompt: string,
-    previewImageBase64: string,
+    previewImage: Buffer | string,
     callbacks: StreamCallbacks
 ): Promise<void> {
-    const model = process.env.LLM_VISION_MODEL || 'gpt-5-2025-08-07';
+    try {
+        assertChannelConfigured('vision');
+    } catch (err) {
+        callbacks.onError(err instanceof Error ? err : new Error(String(err)));
+        return;
+    }
+    const client = createClient('vision');
+    const model = getModel('vision');
     const preferResponsesPrimary = /^gpt-5/i.test(model);
 
     if (preferResponsesPrimary) {
         await runWithFallback(
             async (signal) => {
-                const fullText = await completeVisionViaResponses(model, userPrompt, previewImageBase64, signal);
+                const fullText = await completeVisionViaResponses(client, model, userPrompt, previewImage, signal);
                 callbacks.onTextChunk(fullText);
                 return fullText;
             },
-            (signal) => streamVisionViaChatCompletions(model, userPrompt, previewImageBase64, callbacks, signal),
+            (signal) => streamVisionViaChatCompletions(client, model, userPrompt, previewImage, callbacks, signal),
             callbacks,
             'Vision analysis'
         );
@@ -286,8 +380,8 @@ export async function streamVisionAnalysis(
     }
 
     await runWithFallback(
-        (signal) => streamVisionViaChatCompletions(model, userPrompt, previewImageBase64, callbacks, signal),
-        (signal) => completeVisionViaResponses(model, userPrompt, previewImageBase64, signal),
+        (signal) => streamVisionViaChatCompletions(client, model, userPrompt, previewImage, callbacks, signal),
+        (signal) => completeVisionViaResponses(client, model, userPrompt, previewImage, signal),
         callbacks,
         'Vision analysis'
     );
@@ -300,17 +394,24 @@ export async function streamTextRefine(
     userPrompt: string,
     callbacks: StreamCallbacks
 ): Promise<void> {
-    const model = process.env.LLM_TEXT_MODEL || 'gpt-5-2025-08-07';
+    try {
+        assertChannelConfigured('text');
+    } catch (err) {
+        callbacks.onError(err instanceof Error ? err : new Error(String(err)));
+        return;
+    }
+    const client = createClient('text');
+    const model = getModel('text');
     const preferResponsesPrimary = /^gpt-5/i.test(model);
 
     if (preferResponsesPrimary) {
         await runWithFallback(
             async (signal) => {
-                const fullText = await completeTextViaResponses(model, userPrompt, signal);
+                const fullText = await completeTextViaResponses(client, model, userPrompt, signal);
                 callbacks.onTextChunk(fullText);
                 return fullText;
             },
-            (signal) => streamTextViaChatCompletions(model, userPrompt, callbacks, signal),
+            (signal) => streamTextViaChatCompletions(client, model, userPrompt, callbacks, signal),
             callbacks,
             'Text refine'
         );
@@ -318,9 +419,49 @@ export async function streamTextRefine(
     }
 
     await runWithFallback(
-        (signal) => streamTextViaChatCompletions(model, userPrompt, callbacks, signal),
-        (signal) => completeTextViaResponses(model, userPrompt, signal),
+        (signal) => streamTextViaChatCompletions(client, model, userPrompt, callbacks, signal),
+        (signal) => completeTextViaResponses(client, model, userPrompt, signal),
         callbacks,
         'Text refine'
+    );
+}
+
+/**
+ * 流式调用 Vision-LLM（多轮风格微调，复用 session 缓存的预览图）
+ */
+export async function streamVisionRefine(
+    userPrompt: string,
+    previewImage: Buffer | string,
+    callbacks: StreamCallbacks
+): Promise<void> {
+    try {
+        assertChannelConfigured('vision');
+    } catch (err) {
+        callbacks.onError(err instanceof Error ? err : new Error(String(err)));
+        return;
+    }
+    const client = createClient('vision');
+    const model = getModel('vision');
+    const preferResponsesPrimary = /^gpt-5/i.test(model);
+
+    if (preferResponsesPrimary) {
+        await runWithFallback(
+            async (signal) => {
+                const fullText = await completeVisionViaResponses(client, model, userPrompt, previewImage, signal);
+                callbacks.onTextChunk(fullText);
+                return fullText;
+            },
+            (signal) => streamVisionViaChatCompletions(client, model, userPrompt, previewImage, callbacks, signal),
+            callbacks,
+            'Vision refine'
+        );
+        return;
+    }
+
+    await runWithFallback(
+        (signal) => streamVisionViaChatCompletions(client, model, userPrompt, previewImage, callbacks, signal),
+        (signal) => completeVisionViaResponses(client, model, userPrompt, previewImage, signal),
+        callbacks,
+        'Vision refine'
     );
 }

@@ -40,6 +40,18 @@ echo " Build type : ${CMAKE_BUILD_TYPE}"
 echo " Output dir : ${OUT_DIR}"
 echo "══════════════════════════════════════════════════"
 
+
+# ── 自动获取 emsdk 工具链（首次构建时） ────────────────────────────────────
+EMSDK_DIR="${SCRIPT_DIR}/../../third_party/emsdk"
+if [[ ! -d "${EMSDK_DIR}" ]]; then
+    echo ""
+    echo "── [0/3] 首次构建：自动拉取 emsdk ─────────────────"
+    mkdir -p "$(dirname "${EMSDK_DIR}")"
+    git clone --depth=1 https://github.com/emscripten-core/emsdk.git "${EMSDK_DIR}"
+    "${EMSDK_DIR}/emsdk" install latest
+    "${EMSDK_DIR}/emsdk" activate latest
+fi
+
 # ── 检查 Emscripten 环境 ──────────────────────────────────────────────────────
 if ! command -v emcmake &> /dev/null; then
     # 支持单仓后的 third_party/emsdk，也兼容旧路径 ../../emsdk

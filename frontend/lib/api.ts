@@ -5,7 +5,15 @@
  * 所有与后端的通信都通过此模块，前端其他代码不直接使用 fetch。
  */
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
+function resolveApiBase(): string {
+    const configured = process.env.NEXT_PUBLIC_API_URL?.trim();
+    if (!configured) return '';
+
+    const isLocalOrigin = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(configured);
+    return isLocalOrigin ? '' : configured.replace(/\/$/, '');
+}
+
+const API_BASE = resolveApiBase();
 
 // ─── SSE 事件类型 ─────────────────────────────────────────────────────
 export interface SSETextEvent {
@@ -16,6 +24,16 @@ export interface SSETextEvent {
 export interface SSEFinalEvent {
     type: 'final';
     session_id?: string;
+    assistant_summary?: string;
+    changed_params?: {
+        key: string;
+        before: number;
+        after: number;
+        reason?: string;
+    }[];
+    report_summary?: string;
+    scene_label?: string;
+    quick_chips?: string[];
     diagnostic_report: {
         module_1_diagnosis: string;
         module_2_physics: string;
@@ -162,12 +180,16 @@ export async function refineWithSSE(
  * POST /api/xmp — 根据当前参数生成新的 XMP 下载链接
  */
 export async function generateXmp(
-    lightroomParams: Record<string, number | number[]>
+    lightroomParams: Record<string, number | number[]>,
+    sessionId?: string | null
 ): Promise<{ download_url: string }> {
     const response = await fetch(`${API_BASE}/api/xmp`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ lightroom_params: lightroomParams }),
+        body: JSON.stringify({
+            lightroom_params: lightroomParams,
+            ...(sessionId ? { session_id: sessionId } : {}),
+        }),
     });
 
     if (!response.ok) {

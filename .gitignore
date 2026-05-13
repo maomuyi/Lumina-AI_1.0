@@ -1,4 +1,5 @@
 .DS_Store
+._*
 
 # Node
 node_modules/
@@ -19,6 +20,7 @@ backend/tmp/
 # Generic outputs
 **/dist/
 **/tmp/
+frontend/test-results/
 *.log
 
 # Environment
@@ -28,7 +30,18 @@ backend/tmp/
 
 # Legacy local SDK clone (replaced by git submodule)
 /emsdk/
-!third_party/emsdk/
 
 # Workspace artifacts
 .pnpm-store/
+
+# Build toolchain (auto-cloned by frontend/wasm/build.sh)
+third_party/emsdk/
+
+# Local preset library kept outside Git
+尼康预设/
+
+# Local manual test images kept outside Git
+test-image/
+
+# Local backup files
+*.before-bootstrap

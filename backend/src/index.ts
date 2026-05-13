@@ -23,7 +23,11 @@ const PORT = parseInt(process.env.PORT || '3001', 10);
 const HOST = process.env.HOST || '0.0.0.0';
 const ANALYZE_MAX_FILE_SIZE_MB = parseInt(process.env.ANALYZE_MAX_FILE_SIZE_MB || '50', 10);
 const ANALYZE_MAX_FILE_SIZE_BYTES = Math.max(1, ANALYZE_MAX_FILE_SIZE_MB) * 1024 * 1024;
-const DEFAULT_CORS_ORIGINS = ['http://localhost:*', 'http://127.0.0.1:*'];
+const DEFAULT_CORS_ORIGINS = [
+    'http://localhost:*',
+    'http://127.0.0.1:*',
+    'https://*.trycloudflare.com',
+];
 
 function escapeRegExp(input: string): string {
     return input.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
